@@ -90,8 +90,16 @@ export {
   resolveContinuationInstruction,
   validateActionAgainstIntent,
   allowedActionTypesForIntent,
+  validateOpenAppAction,
+  looksLikeApplicationName,
+  extractOpenAppName,
+  instructionImpliesUiOpen,
 } from "./intent/index.js";
-export type { ClassifiedIntent, IntentValidationResult } from "./intent/index.js";
+export type {
+  ClassifiedIntent,
+  IntentValidationResult,
+  OpenAppValidationResult,
+} from "./intent/index.js";
 
 export type {
   Screenshot,

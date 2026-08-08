@@ -38,6 +38,7 @@ import {
   classifyUserIntent,
   resolveContinuationInstruction,
   validateActionAgainstIntent,
+  validateOpenAppAction,
   type ClassifiedIntent,
 } from "../intent/index.js";
 
@@ -176,6 +177,20 @@ export class Orchestrator {
       state = { ...state, userInstruction };
     }
 
+    boundaryLog(state.taskId, "USER_INSTRUCTION", {
+      instruction: userInstruction,
+      rawInstruction: input.userInstruction,
+    });
+    boundaryLog(state.taskId, "INTENT", {
+      intent: intent.intent,
+      scrollDirection: intent.scrollDirection,
+      scrollAmount: intent.scrollAmount,
+      targetLabel: intent.targetLabel ?? undefined,
+      isContinuation:
+        intent.isContinuation ||
+        continuation.instruction !== input.userInstruction,
+    });
+    // Back-compat alias for existing log consumers
     boundaryLog(state.taskId, "USER_INTENT", {
       intent: intent.intent,
       instruction: userInstruction,
@@ -309,28 +324,135 @@ export class Orchestrator {
       (intent.intent === "SCROLL" ||
         (intent.intent === "OPEN_APP" && intent.targetLabel))
     ) {
-      const deterministic =
-        intent.intent === "SCROLL"
-          ? buildDeterministicScrollPlan(intent, userInstruction)
-          : buildDeterministicOpenAppPlan(intent);
-      boundaryLog(state.taskId, "MODEL_RESPONSE", {
+      if (intent.intent === "SCROLL") {
+        const deterministic = buildDeterministicScrollPlan(
+          intent,
+          userInstruction,
+        );
+        boundaryLog(state.taskId, "RAW_AI_RESPONSE", {
+          source: "deterministic_intent",
+          actions: deterministic.actions.map((a) => ({
+            type: a.type,
+            params: a.params,
+          })),
+        });
+        boundaryLog(state.taskId, "MODEL_RESPONSE", {
+          source: "deterministic_intent",
+          actions: deterministic.actions.map((a) => ({
+            type: a.type,
+            params: a.params,
+          })),
+        });
+        boundaryLog(state.taskId, "NORMALIZED_ACTION", {
+          actions: deterministic.actions.map((a) => ({
+            type: a.type,
+            params: a.params,
+          })),
+        });
+        boundaryLog(state.taskId, "VALIDATED_ACTION", { result: "PASS" });
+        boundaryLog(state.taskId, "BACKEND_ACTION", {
+          status: deterministic.status,
+          actions: deterministic.actions.map((a) => ({
+            type: a.type,
+            params: a.params,
+          })),
+        });
+        state = recordPlannedActions(state, deterministic.actions, "running");
+        taskLog(state.taskId, `AI status: ${deterministic.status}`, {
+          actions: deterministic.actions.map((a) => a.type),
+        });
+        return {
+          taskState: state,
+          response: deterministic,
+          executionMode: state.executionMode,
+        };
+      }
+
+      // OPEN_APP — validate app name before emitting; never guess another action
+      const openPlan = buildDeterministicOpenAppPlan(intent);
+      const openAction = openPlan.actions[0];
+      boundaryLog(state.taskId, "RAW_AI_RESPONSE", {
         source: "deterministic_intent",
-        actions: deterministic.actions.map((a) => ({
+        actions: openPlan.actions.map((a) => ({
           type: a.type,
           params: a.params,
         })),
       });
       boundaryLog(state.taskId, "NORMALIZED_ACTION", {
-        actions: deterministic.actions.map((a) => a.type),
+        actions: openPlan.actions.map((a) => ({
+          type: a.type,
+          params: a.params,
+        })),
+      });
+
+      if (openAction) {
+        const openCheck = validateOpenAppAction(openAction, userInstruction);
+        if (!openCheck.ok) {
+          boundaryLog(state.taskId, "VALIDATED_ACTION", {
+            result: "REJECT",
+            reason: openCheck.reason,
+          });
+          const askPlan: AiPlanResponse = {
+            status: "NEEDS_USER_INPUT",
+            reasoning_summary:
+              "OPEN_APP failed validation; refusing to guess a UI click or substitute app.",
+            actions: [
+              {
+                type: "ASK_USER",
+                params: {
+                  question:
+                    openCheck.reason ??
+                    "I could not identify a valid desktop application to open. Which app should I launch?",
+                  reason: openCheck.reason,
+                },
+              },
+            ],
+            message:
+              openCheck.reason ??
+              "I could not identify a valid desktop application to open.",
+          };
+          boundaryLog(state.taskId, "BACKEND_ACTION", {
+            status: askPlan.status,
+            actions: askPlan.actions.map((a) => ({
+              type: a.type,
+              params: a.params,
+            })),
+          });
+          state = recordPlannedActions(
+            state,
+            askPlan.actions,
+            "needs_user_input",
+          );
+          return {
+            taskState: state,
+            response: askPlan,
+            executionMode: state.executionMode,
+          };
+        }
+      }
+
+      boundaryLog(state.taskId, "MODEL_RESPONSE", {
+        source: "deterministic_intent",
+        actions: openPlan.actions.map((a) => ({
+          type: a.type,
+          params: a.params,
+        })),
       });
       boundaryLog(state.taskId, "VALIDATED_ACTION", { result: "PASS" });
-      state = recordPlannedActions(state, deterministic.actions, "running");
-      taskLog(state.taskId, `AI status: ${deterministic.status}`, {
-        actions: deterministic.actions.map((a) => a.type),
+      boundaryLog(state.taskId, "BACKEND_ACTION", {
+        status: openPlan.status,
+        actions: openPlan.actions.map((a) => ({
+          type: a.type,
+          params: a.params,
+        })),
+      });
+      state = recordPlannedActions(state, openPlan.actions, "running");
+      taskLog(state.taskId, `AI status: ${openPlan.status}`, {
+        actions: openPlan.actions.map((a) => a.type),
       });
       return {
         taskState: state,
-        response: deterministic,
+        response: openPlan,
         executionMode: state.executionMode,
       };
     }
@@ -360,6 +482,14 @@ export class Orchestrator {
       };
     }
 
+    boundaryLog(state.taskId, "RAW_AI_RESPONSE", {
+      status: rawPlan.status,
+      reasoning_summary: rawPlan.reasoning_summary,
+      actions: rawPlan.actions.map((a) => ({
+        type: a.type,
+        params: a.params,
+      })),
+    });
     boundaryLog(state.taskId, "MODEL_RESPONSE", {
       status: rawPlan.status,
       reasoning_summary: rawPlan.reasoning_summary,
@@ -386,7 +516,7 @@ export class Orchestrator {
     let plan: AiPlanResponse = planParse.data as AiPlanResponse;
 
     boundaryLog(state.taskId, "NORMALIZED_ACTION", {
-      actions: plan.actions.map((a) => a.type),
+      actions: plan.actions.map((a) => ({ type: a.type, params: a.params })),
     });
 
     // --- Semantic intent validation (structured action is authoritative) ---

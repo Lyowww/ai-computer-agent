@@ -4,6 +4,9 @@ import {
   isContinuationRequest,
   resolveContinuationInstruction,
   validateActionAgainstIntent,
+  validateOpenAppAction,
+  looksLikeApplicationName,
+  instructionImpliesUiOpen,
 } from "../src/intent/index.js";
 import { Orchestrator } from "../src/orchestrator/index.js";
 import { parseAction } from "../src/actions/index.js";
@@ -59,10 +62,70 @@ describe("action semantics — intent classification", () => {
     expect(intent.scrollAmount).toBeGreaterThan(5);
   });
 
-  it("Test E: open Slack → OPEN_APP", () => {
+  it('open Slack → OPEN_APP("Slack")', () => {
     const intent = classifyUserIntent("open Slack");
     expect(intent.intent).toBe("OPEN_APP");
-    expect(intent.targetLabel?.toLowerCase()).toContain("slack");
+    expect(intent.targetLabel?.toLowerCase()).toBe("slack");
+  });
+
+  it('launch Telegram → OPEN_APP("Telegram")', () => {
+    const intent = classifyUserIntent("launch Telegram");
+    expect(intent.intent).toBe("OPEN_APP");
+    expect(intent.targetLabel?.toLowerCase()).toBe("telegram");
+  });
+
+  it("open new tab on google → NOT OPEN_APP", () => {
+    const intent = classifyUserIntent("open new tab on google");
+    expect(intent.intent).not.toBe("OPEN_APP");
+    expect(intent.targetLabel?.toLowerCase()).not.toBe("new");
+  });
+
+  it("open new tab in Chrome → NOT OPEN_APP", () => {
+    const intent = classifyUserIntent("open new tab in Chrome");
+    expect(intent.intent).not.toBe("OPEN_APP");
+    expect(intent.targetLabel?.toLowerCase()).not.toBe("new");
+  });
+
+  it("open Dashboard tab → CLICK", () => {
+    const intent = classifyUserIntent("open Dashboard tab");
+    expect(intent.intent).toBe("CLICK");
+    expect(intent.targetLabel?.toLowerCase()).toContain("dashboard");
+  });
+
+  it("open Processes tab → CLICK", () => {
+    const intent = classifyUserIntent("open Processes tab");
+    expect(intent.intent).toBe("CLICK");
+    expect(intent.targetLabel?.toLowerCase()).toContain("processes");
+  });
+
+  it("open Settings tab → CLICK", () => {
+    const intent = classifyUserIntent("open Settings tab");
+    expect(intent.intent).toBe("CLICK");
+    expect(intent.targetLabel?.toLowerCase()).toContain("settings");
+  });
+
+  it("open sidebar → CLICK", () => {
+    const intent = classifyUserIntent("open sidebar");
+    expect(intent.intent).toBe("CLICK");
+  });
+
+  it("open ChatGPT tab in Chrome → CLICK (not OPEN_APP ChatGPT)", () => {
+    const intent = classifyUserIntent("open ChatGPT tab in Chrome");
+    expect(intent.intent).toBe("CLICK");
+    expect(intent.targetLabel?.toLowerCase()).toContain("chatgpt");
+  });
+
+  it("open in left sidebar dashboard tab → CLICK (not OPEN_APP in)", () => {
+    const intent = classifyUserIntent("open in left sidebar dashboard tab");
+    expect(intent.intent).toBe("CLICK");
+    expect(intent.targetLabel?.toLowerCase()).not.toBe("in");
+    expect(intent.targetLabel?.toLowerCase()).toContain("dashboard");
+  });
+
+  it("scroll Slack DMs to bottom → SCROLL", () => {
+    const intent = classifyUserIntent("scroll Slack DMs to bottom");
+    expect(intent.intent).toBe("SCROLL");
+    expect(intent.scrollDirection).toBe("down");
   });
 
   it("Test F: click refresh → CLICK", () => {
@@ -74,6 +137,58 @@ describe("action semantics — intent classification", () => {
     const intent = classifyUserIntent("scroll to bottom");
     expect(intent.intent).toBe("SCROLL");
     expect(intent.scrollDirection).toBe("down");
+  });
+
+  it("Open Chrome → OPEN_APP with Chrome", () => {
+    const intent = classifyUserIntent("Open Chrome");
+    expect(intent.intent).toBe("OPEN_APP");
+    expect(intent.targetLabel?.toLowerCase()).toContain("chrome");
+  });
+
+  it("open Google Chrome → multi-word app name", () => {
+    const intent = classifyUserIntent("open Google Chrome");
+    expect(intent.intent).toBe("OPEN_APP");
+    expect(intent.targetLabel?.toLowerCase()).toBe("google chrome");
+  });
+});
+
+describe("OPEN_APP validation layer", () => {
+  it("accepts real application names", () => {
+    expect(looksLikeApplicationName("Slack")).toBe(true);
+    expect(looksLikeApplicationName("Telegram")).toBe(true);
+    expect(looksLikeApplicationName("Google Chrome")).toBe(true);
+    expect(
+      validateOpenAppAction({ type: "OPEN_APP", params: { app: "Slack" } }).ok,
+    ).toBe(true);
+  });
+
+  it('rejects OPEN_APP("new") / OPEN_APP("in") / UI nouns', () => {
+    for (const app of ["new", "in", "tab", "dashboard", "settings"]) {
+      expect(looksLikeApplicationName(app)).toBe(false);
+      const result = validateOpenAppAction({
+        type: "OPEN_APP",
+        params: { app },
+      });
+      expect(result.ok).toBe(false);
+      expect(result.needsUserInput).toBe(true);
+    }
+  });
+
+  it("rejects OPEN_APP when instruction is UI open", () => {
+    expect(instructionImpliesUiOpen("open new tab on google")).toBe(true);
+    const result = validateOpenAppAction(
+      { type: "OPEN_APP", params: { app: "Chrome" } },
+      "open new tab on google",
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("does not convert failed OPEN_APP into another action type", () => {
+    const result = validateActionAgainstIntent("open new tab on google", [
+      { type: "OPEN_APP", params: { app: "new" } },
+    ]);
+    expect(result.ok).toBe(false);
+    expect(result.needsUserInput).toBe(true);
   });
 });
 
@@ -96,6 +211,13 @@ describe("action semantics — validateActionAgainstIntent", () => {
   it("rejects CLICK when user asked to open Slack", () => {
     const result = validateActionAgainstIntent("open Slack", [
       { type: "CLICK", params: { x: 200, y: 500, button: "LEFT" } },
+    ]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects OPEN_APP when user asked to open Dashboard tab", () => {
+    const result = validateActionAgainstIntent("open Dashboard tab", [
+      { type: "OPEN_APP", params: { app: "Dashboard" } },
     ]);
     expect(result.ok).toBe(false);
   });
@@ -147,6 +269,7 @@ describe("action semantics — orchestrator end-to-end", () => {
       "scroll down",
       "scroll dm-s in slack to bottom",
       "scroll to bottom",
+      "scroll Slack DMs to bottom",
     ]) {
       const result = await orch.planNextAction({
         userInstruction: instruction,
@@ -161,6 +284,116 @@ describe("action semantics — orchestrator end-to-end", () => {
         expect(result.response.actions[0].params.direction).toBe("down");
       }
     }
+  });
+
+  it('open new tab on google never emits OPEN_APP("new")', async () => {
+    const orch = orchestratorWith({
+      status: "ACTION_REQUIRED",
+      reasoning_summary: "Opening new as an app.",
+      actions: [{ type: "OPEN_APP", params: { app: "new" } }],
+      message: "Opening new.",
+    });
+
+    const result = await orch.planNextAction({
+      userInstruction: "open new tab on google",
+      screenshot,
+    });
+
+    expect(
+      result.response.actions.every(
+        (a) =>
+          !(
+            a.type === "OPEN_APP" &&
+            typeof a.params.app === "string" &&
+            a.params.app.toLowerCase() === "new"
+          ),
+      ),
+    ).toBe(true);
+    expect(result.response.actions.every((a) => a.type !== "OPEN_APP")).toBe(
+      true,
+    );
+    expect(result.response.status).toBe("NEEDS_USER_INPUT");
+  });
+
+  it('open in left sidebar dashboard tab never emits OPEN_APP("in")', async () => {
+    const orch = orchestratorWith({
+      status: "ACTION_REQUIRED",
+      reasoning_summary: "Wrongly opening in.",
+      actions: [{ type: "OPEN_APP", params: { app: "in" } }],
+      message: "Opening in.",
+    });
+
+    const result = await orch.planNextAction({
+      userInstruction: "open in left sidebar dashboard tab",
+      screenshot,
+    });
+
+    expect(result.response.actions.every((a) => a.type !== "OPEN_APP")).toBe(
+      true,
+    );
+    // Intent is CLICK — OPEN_APP is rejected; do not invent another action
+    expect(result.response.status).toBe("NEEDS_USER_INPUT");
+  });
+
+  it("open Dashboard tab plans CLICK Dashboard", async () => {
+    const orch = orchestratorWith({
+      status: "ACTION_REQUIRED",
+      reasoning_summary: "Dashboard is in the sidebar.",
+      actions: [
+        {
+          type: "CLICK",
+          params: {
+            x: 104,
+            y: 469,
+            button: "LEFT",
+            targetLabel: "Dashboard",
+            targetConfidence: 0.93,
+          },
+        },
+      ],
+      message: "Clicking Dashboard.",
+    });
+
+    const result = await orch.planNextAction({
+      userInstruction: "open Dashboard tab",
+      screenshot,
+    });
+
+    expect(result.response.status).toBe("ACTION_REQUIRED");
+    expect(result.response.actions[0]?.type).toBe("CLICK");
+    if (result.response.actions[0]?.type === "CLICK") {
+      expect(result.response.actions[0].params.targetLabel).toBe("Dashboard");
+    }
+  });
+
+  it("open ChatGPT tab in Chrome plans CLICK not OPEN_APP", async () => {
+    const orch = orchestratorWith({
+      status: "ACTION_REQUIRED",
+      reasoning_summary: "ChatGPT tab visible.",
+      actions: [
+        {
+          type: "CLICK",
+          params: {
+            x: 120,
+            y: 36,
+            button: "LEFT",
+            targetLabel: "ChatGPT",
+            targetConfidence: 0.95,
+          },
+        },
+      ],
+      message: "Clicking ChatGPT tab.",
+    });
+
+    const result = await orch.planNextAction({
+      userInstruction: "open ChatGPT tab in Chrome",
+      screenshot,
+    });
+
+    expect(result.response.actions[0]?.type).toBe("CLICK");
+    expect(result.response.actions.every((a) => a.type !== "OPEN_APP")).toBe(
+      true,
+    );
   });
 
   it("Test C: missing ChatGPT → NEEDS_USER_INPUT, no click", async () => {
@@ -262,7 +495,31 @@ describe("action semantics — orchestrator end-to-end", () => {
     });
 
     expect(result.response.actions[0]?.type).toBe("OPEN_APP");
+    if (result.response.actions[0]?.type === "OPEN_APP") {
+      expect(result.response.actions[0].params.app.toLowerCase()).toBe("slack");
+    }
     expect(result.response.actions.every((a) => a.type !== "CLICK")).toBe(true);
+  });
+
+  it("launch Telegram → OPEN_APP", async () => {
+    const orch = orchestratorWith({
+      status: "ACTION_REQUIRED",
+      reasoning_summary: "noop",
+      actions: [{ type: "CLICK", params: { x: 1, y: 1, button: "LEFT" } }],
+      message: "noop",
+    });
+
+    const result = await orch.planNextAction({
+      userInstruction: "launch Telegram",
+      screenshot,
+    });
+
+    expect(result.response.actions[0]?.type).toBe("OPEN_APP");
+    if (result.response.actions[0]?.type === "OPEN_APP") {
+      expect(result.response.actions[0].params.app.toLowerCase()).toBe(
+        "telegram",
+      );
+    }
   });
 
   it("Test F: click refresh → exactly one CLICK", async () => {
