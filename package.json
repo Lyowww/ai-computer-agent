@@ -13,8 +13,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "postinstall": "npm run build",
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/server.js",
+    "start": "node dist/index.js",
     "start:server": "tsx src/server.ts",
     "dev:server": "tsx watch src/server.ts",
     "test": "vitest run",
@@ -23,7 +24,7 @@
     "clean": "rm -rf dist"
   },
   "engines": {
-    "node": ">=20"
+    "node": "20.x"
   },
   "keywords": [
     "ai",
@@ -34,13 +35,13 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@types/node": "^22.10.5",
     "dotenv": "^16.4.7",
+    "typescript": "^5.7.3",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3",
     "vitest": "^2.1.8"
   }
 }

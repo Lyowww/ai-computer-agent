@@ -1,13 +1,17 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# If this service already exists, also set these in the Render Dashboard
+# (Blueprint does not always override an existing service's Build/Start):
+#   Build Command: npm install
+#   Start Command: node ./dist/index.js
+# (postinstall compiles TypeScript; index.js starts the HTTP server when run directly)
 services:
   - type: web
     name: ai-computer-agent
     runtime: node
     plan: free
-    # Compile TypeScript (dist/ is gitignored). Include devDeps so `tsc` is available
-    # even when NODE_ENV=production during install.
-    buildCommand: npm install --include=dev && npm run build
-    startCommand: npm start
+    buildCommand: npm install
+    startCommand: node ./dist/index.js
     healthCheckPath: /health
     envVars:
       - key: NODE_VERSION

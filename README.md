@@ -228,17 +228,15 @@ Set backend `AI_SERVICE_URL=http://localhost:4000`. OpenRouter/Gemini keys stay 
 
 ### Deploy on Render
 
-In the Render dashboard (or via `render.yaml`):
+Works with the default Render commands:
 
 | Setting | Value |
 |---------|--------|
-| **Build Command** | `npm install --include=dev && npm run build` |
-| **Start Command** | `npm start` |
+| **Build Command** | `npm install` |
+| **Start Command** | `node ./dist/index.js` |
 | **Health Check Path** | `/health` |
 
-Do **not** use `node ./dist/index.js` — that is the library export entry. The HTTP service is `dist/server.js` (`npm start`).
-
-`dist/` is gitignored, so the build must compile TypeScript. `--include=dev` ensures `tsc` is available when `NODE_ENV=production`.
+`postinstall` compiles TypeScript (`dist/` is gitignored). Running `node ./dist/index.js` starts the HTTP adapter (`/health`, `POST /v1/plan`). Importing the package as a library does not start a server.
 
 Required env vars: `OPENROUTER_API_KEY` (or `GEMINI_API_KEY`), plus optional `AI_SERVICE_API_KEY`, `AI_MODEL`, etc.
 

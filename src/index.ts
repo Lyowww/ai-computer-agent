@@ -70,3 +70,28 @@ export type {
   TaskStatus,
   ActionType,
 } from "./types/index.js";
+
+/**
+ * When Render (or a process manager) runs `node ./dist/index.js`, start the
+ * HTTP adapter. Library imports of this module do not start a server.
+ */
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { config as loadDotenv } from "dotenv";
+
+function isDirectEntrypoint(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return path.resolve(entry) === path.resolve(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectEntrypoint()) {
+  loadDotenv();
+  void import("./http/server.js").then(({ startPlanServer }) => {
+    startPlanServer();
+  });
+}
