@@ -3,12 +3,14 @@ import {
   ComputerActionSchema,
   AiPlanResponseSchema,
   ScreenshotSchema,
+  normalizeRawAction,
 } from "../src/schemas/index.js";
 import {
   parseAction,
   tryParseAction,
   actionFingerprint,
   isSupportedActionType,
+  hashTextFingerprint,
 } from "../src/actions/index.js";
 
 describe("action schemas", () => {
@@ -19,6 +21,19 @@ describe("action schemas", () => {
     });
     expect(action.type).toBe("CLICK");
     expect(action.params).toMatchObject({ x: 100, y: 200, button: "LEFT" });
+  });
+
+  it("normalizes flat model actions into params shape", () => {
+    const action = parseAction({
+      type: "CLICK",
+      x: 500,
+      y: 300,
+      button: "left",
+    });
+    expect(action).toEqual({
+      type: "CLICK",
+      params: { x: 500, y: 300, button: "LEFT" },
+    });
   });
 
   it("parses TYPE_TEXT and OPEN_APP", () => {
@@ -50,6 +65,15 @@ describe("action schemas", () => {
     ).toBe(false);
   });
 
+  it("rejects invalid WAIT limits", () => {
+    expect(
+      ComputerActionSchema.safeParse({
+        type: "WAIT",
+        params: { ms: 120_000 },
+      }).success,
+    ).toBe(false);
+  });
+
   it("validates full AI plan responses", () => {
     const plan = AiPlanResponseSchema.parse({
       status: "ACTION_REQUIRED",
@@ -58,6 +82,30 @@ describe("action schemas", () => {
       message: "Opening Google Chrome.",
     });
     expect(plan.actions).toHaveLength(1);
+  });
+
+  it("accepts flat actions inside a plan", () => {
+    const plan = AiPlanResponseSchema.parse({
+      status: "ACTION_REQUIRED",
+      reasoning_summary: "Button visible.",
+      actions: [{ type: "CLICK", x: 10, y: 20, button: "left" }],
+      message: "Clicking.",
+    });
+    expect(plan.actions[0]).toEqual({
+      type: "CLICK",
+      params: { x: 10, y: 20, button: "LEFT" },
+    });
+  });
+
+  it("rejects malformed plan responses", () => {
+    expect(
+      AiPlanResponseSchema.safeParse({
+        status: "NOPE",
+        reasoning_summary: "x",
+        actions: [],
+        message: "y",
+      }).success,
+    ).toBe(false);
   });
 
   it("validates screenshots", () => {
@@ -69,9 +117,41 @@ describe("action schemas", () => {
     expect(shot.width).toBe(1920);
   });
 
-  it("builds stable fingerprints", () => {
-    const a = parseAction({ type: "CLICK", params: { x: 1, y: 2, button: "LEFT" } });
-    const b = parseAction({ type: "CLICK", params: { button: "LEFT", y: 2, x: 1 } });
+  it("builds deterministic fingerprints", () => {
+    const a = parseAction({
+      type: "CLICK",
+      params: { x: 500, y: 300, button: "LEFT" },
+    });
+    const b = parseAction({
+      type: "CLICK",
+      params: { button: "left", y: 300, x: 500 },
+    });
+    expect(actionFingerprint(a)).toBe("CLICK:500:300:left");
     expect(actionFingerprint(a)).toBe(actionFingerprint(b));
+
+    const typed = parseAction({
+      type: "TYPE_TEXT",
+      params: { text: "secret password" },
+    });
+    expect(actionFingerprint(typed)).toBe(
+      `TYPE_TEXT:${hashTextFingerprint("secret password")}`,
+    );
+    expect(actionFingerprint(typed)).not.toContain("secret");
+
+    expect(
+      actionFingerprint(
+        parseAction({ type: "HOTKEY", params: { keys: ["CTRL", "L"] } }),
+      ),
+    ).toBe("HOTKEY:ctrl+l");
+    expect(
+      actionFingerprint(
+        parseAction({ type: "OPEN_APP", params: { app: "Chrome" } }),
+      ),
+    ).toBe("OPEN_APP:chrome");
+  });
+
+  it("normalizeRawAction leaves unknown types alone", () => {
+    const raw = { type: "RUN_SHELL", command: "ls" };
+    expect(normalizeRawAction(raw)).toEqual(raw);
   });
 });

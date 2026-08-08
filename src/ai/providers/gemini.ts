@@ -5,11 +5,20 @@ import type {
   AiMessageContent,
   AiProvider,
 } from "../../types/index.js";
+import {
+  ProviderError,
+  fetchWithTimeout,
+  mapHttpStatusToProviderError,
+  sanitizeProviderErrorText,
+  withRetries,
+} from "../errors.js";
 
 export interface GeminiConfig {
   apiKey: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  maxRetries?: number;
 }
 
 interface GeminiPart {
@@ -25,9 +34,13 @@ interface GeminiContent {
 function parseDataUrl(url: string): { mimeType: string; data: string } {
   const match = /^data:([^;]+);base64,(.+)$/s.exec(url);
   if (!match) {
-    throw new Error(
-      "Gemini provider requires data-URL or base64 images (HTTPS image URLs are not supported here)",
-    );
+    throw new ProviderError({
+      code: "VISION_UNSUPPORTED",
+      message:
+        "Gemini provider requires data-URL or base64 images (HTTPS image URLs are not supported)",
+      provider: "gemini",
+      retryable: false,
+    });
   }
   return { mimeType: match[1], data: match[2] };
 }
@@ -45,9 +58,13 @@ function contentToParts(content: string | AiMessageContent[]): GeminiPart[] {
       const { mimeType, data } = parseDataUrl(part.url);
       return { inlineData: { mimeType, data } };
     }
-    throw new Error(
-      "Gemini provider requires data-URL images; remote HTTPS image URLs are unsupported",
-    );
+    throw new ProviderError({
+      code: "VISION_UNSUPPORTED",
+      message:
+        "Gemini provider requires data-URL images; remote HTTPS image URLs are unsupported",
+      provider: "gemini",
+      retryable: false,
+    });
   });
 }
 
@@ -80,6 +97,24 @@ function toGeminiPayload(messages: AiChatMessage[]): {
   };
 }
 
+function extractErrorMessage(raw: unknown): string {
+  if (!raw || typeof raw !== "object") return "unknown error";
+  const obj = raw as {
+    error?: { message?: string } | string;
+    message?: string;
+  };
+  if (typeof obj.error === "string") return obj.error;
+  if (obj.error && typeof obj.error === "object" && obj.error.message) {
+    return obj.error.message;
+  }
+  if (typeof obj.message === "string") return obj.message;
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return "unknown error";
+  }
+}
+
 /**
  * Google Gemini provider via the Generative Language API (v1beta).
  * https://ai.google.dev/api/generate-content
@@ -89,19 +124,38 @@ export class GeminiProvider implements AiProvider {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
+  private readonly maxRetries: number;
 
   constructor(config: GeminiConfig) {
     if (!config.apiKey) {
-      throw new Error("GEMINI_API_KEY is required for GeminiProvider");
+      throw new ProviderError({
+        code: "MISSING_API_KEY",
+        message: "GEMINI_API_KEY is required for GeminiProvider",
+        provider: "gemini",
+        retryable: false,
+      });
     }
     this.apiKey = config.apiKey;
     this.baseUrl = (
       config.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta"
     ).replace(/\/$/, "");
     this.fetchImpl = config.fetchImpl ?? fetch;
+    this.timeoutMs = config.timeoutMs ?? 60_000;
+    this.maxRetries = config.maxRetries ?? 3;
   }
 
   async complete(request: AiCompletionRequest): Promise<AiCompletionResponse> {
+    return withRetries((attempt) => this.completeOnce(request, attempt), {
+      maxAttempts: this.maxRetries,
+      baseDelayMs: 500,
+    });
+  }
+
+  private async completeOnce(
+    request: AiCompletionRequest,
+    _attempt: number,
+  ): Promise<AiCompletionResponse> {
     const { systemInstruction, contents } = toGeminiPayload(request.messages);
 
     const body: Record<string, unknown> = {
@@ -119,43 +173,98 @@ export class GeminiProvider implements AiProvider {
       body.systemInstruction = systemInstruction;
     }
 
+    // Keep API key out of logged URLs — only used for the request itself.
     const url = `${this.baseUrl}/models/${encodeURIComponent(request.model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
 
-    const res = await this.fetchImpl(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    const raw = (await res.json()) as Record<string, unknown>;
-
-    if (!res.ok) {
-      const errMsg =
-        (raw as { error?: { message?: string } })?.error?.message ??
-        JSON.stringify(raw);
-      throw new Error(`Gemini API error (${res.status}): ${errMsg}`);
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(
+        this.fetchImpl,
+        url,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        this.timeoutMs,
+        "gemini",
+      );
+    } catch (err) {
+      if (err instanceof ProviderError) throw err;
+      throw new ProviderError({
+        code: "NETWORK",
+        message: `Gemini network error: ${
+          err instanceof Error
+            ? sanitizeProviderErrorText(err.message)
+            : "unknown"
+        }`,
+        provider: "gemini",
+        retryable: true,
+        cause: err,
+      });
     }
 
-    const candidates = raw.candidates as
-      | Array<{ content?: { parts?: Array<{ text?: string }> } }>
-      | undefined;
-    const parts = candidates?.[0]?.content?.parts ?? [];
+    let raw: unknown;
+    try {
+      raw = await res.json();
+    } catch (err) {
+      throw new ProviderError({
+        code: "MALFORMED_RESPONSE",
+        message: "Gemini returned a non-JSON response body",
+        provider: "gemini",
+        status: res.status,
+        retryable: res.status >= 500,
+        cause: err,
+      });
+    }
+
+    if (!res.ok) {
+      throw mapHttpStatusToProviderError(
+        "gemini",
+        res.status,
+        extractErrorMessage(raw),
+      );
+    }
+
+    const candidates = (raw as { candidates?: unknown }).candidates;
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      throw new ProviderError({
+        code: "MALFORMED_RESPONSE",
+        message: "Gemini returned no candidates",
+        provider: "gemini",
+        retryable: false,
+      });
+    }
+
+    const parts =
+      (
+        candidates[0] as {
+          content?: { parts?: Array<{ text?: string }> };
+        }
+      )?.content?.parts ?? [];
     const content = parts
       .map((p) => p.text ?? "")
       .join("")
       .trim();
 
     if (!content) {
-      throw new Error("Gemini returned empty completion content");
+      throw new ProviderError({
+        code: "MALFORMED_RESPONSE",
+        message: "Gemini returned empty completion content",
+        provider: "gemini",
+        retryable: false,
+      });
     }
 
-    const usageMeta = raw.usageMetadata as
-      | {
+    const usageMeta = (
+      raw as {
+        usageMetadata?: {
           promptTokenCount?: number;
           candidatesTokenCount?: number;
           totalTokenCount?: number;
-        }
-      | undefined;
+        };
+      }
+    ).usageMetadata;
 
     return {
       content,

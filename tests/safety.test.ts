@@ -9,18 +9,23 @@ const shot: Screenshot = {
 };
 
 describe("action safety layer", () => {
-  it("allows in-bounds clicks", () => {
+  it("allows in-bounds clicks and normal productivity actions", () => {
     const actions: ComputerAction[] = [
       { type: "CLICK", params: { x: 100, y: 200, button: "LEFT" } },
+      { type: "OPEN_APP", params: { app: "Google Chrome" } },
+      { type: "TYPE_TEXT", params: { text: "youtube.com" } },
+      { type: "HOTKEY", params: { keys: ["meta", "l"] } },
     ];
-    const result = validateActionSafety(actions, shot);
+    const result = validateActionSafety(actions, shot, {
+      userInstruction: "Open Chrome and search Google",
+    });
     expect(result.ok).toBe(true);
-    expect(result.safeActions).toHaveLength(1);
+    expect(result.safeActions).toHaveLength(4);
   });
 
-  it("blocks out-of-bounds coordinates", () => {
+  it("blocks out-of-bounds coordinates without clamping", () => {
     const actions: ComputerAction[] = [
-      { type: "CLICK", params: { x: 5000, y: 10, button: "LEFT" } },
+      { type: "CLICK", params: { x: 1920, y: 500, button: "LEFT" } },
     ];
     const result = validateActionSafety(actions, shot);
     expect(result.ok).toBe(false);
@@ -29,14 +34,22 @@ describe("action safety layer", () => {
   });
 
   it("blocks shell-like TYPE_TEXT content", () => {
-    const actions: ComputerAction[] = [
-      { type: "TYPE_TEXT", params: { text: "sudo rm -rf /" } },
+    const samples = [
+      "sudo rm -rf /",
+      "bash -c 'echo hi'",
+      "python3 -c 'print(1)'",
+      "tell application \"Finder\" to delete",
     ];
-    const result = validateActionSafety(actions, shot);
-    expect(result.ok).toBe(false);
-    expect(
-      result.violations.some((v) => v.code === "BLOCKED_SCRIPT_CONTENT"),
-    ).toBe(true);
+    for (const text of samples) {
+      const result = validateActionSafety(
+        [{ type: "TYPE_TEXT", params: { text } }],
+        shot,
+      );
+      expect(result.ok).toBe(false);
+      expect(
+        result.violations.some((v) => v.code === "BLOCKED_SCRIPT_CONTENT"),
+      ).toBe(true);
+    }
   });
 
   it("escalates consequential instructions to ASK_USER", () => {

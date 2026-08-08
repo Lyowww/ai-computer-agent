@@ -3,6 +3,10 @@ import type { AiProviderName, OrchestratorConfig } from "../types/index.js";
 
 loadDotenv();
 
+const DEFAULT_OPENROUTER_MODEL = "google/gemini-2.5-flash";
+const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const DEFAULT_TIMEOUT_MS = 60_000;
+
 function requirePositiveInt(value: string | undefined, fallback: number): number {
   if (value === undefined || value === "") return fallback;
   const n = Number.parseInt(value, 10);
@@ -22,34 +26,51 @@ function parseProvider(value: string | undefined): AiProviderName {
   );
 }
 
+function readEnv(name: string): string | undefined {
+  const value = process.env[name];
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
 /**
  * Load orchestrator configuration from environment variables.
- * Never hardcodes API keys.
+ * Never hardcodes API keys. Provider-specific keys are only required
+ * when that provider is selected (see assertProviderCredentials).
  */
 export function loadConfig(
   overrides: Partial<OrchestratorConfig> = {},
 ): OrchestratorConfig {
-  const provider = overrides.provider ?? parseProvider(process.env.AI_PROVIDER);
+  const provider = overrides.provider ?? parseProvider(readEnv("AI_PROVIDER"));
   const model =
     overrides.model ??
-    process.env.AI_MODEL ??
-    (provider === "gemini" ? "gemini-2.0-flash" : "openai/gpt-4o");
+    readEnv("AI_MODEL") ??
+    (provider === "gemini" ? DEFAULT_GEMINI_MODEL : DEFAULT_OPENROUTER_MODEL);
 
   return {
     provider,
     model,
     maxIterations:
       overrides.maxIterations ??
-      requirePositiveInt(process.env.MAX_AGENT_ITERATIONS, 30),
+      requirePositiveInt(readEnv("MAX_AGENT_ITERATIONS"), 30),
     maxSameActionRetries:
       overrides.maxSameActionRetries ??
-      requirePositiveInt(process.env.MAX_SAME_ACTION_RETRIES, 3),
+      requirePositiveInt(readEnv("MAX_SAME_ACTION_RETRIES"), 3),
+    timeoutMs:
+      overrides.timeoutMs ??
+      requirePositiveInt(readEnv("AI_TIMEOUT_MS"), DEFAULT_TIMEOUT_MS),
     openRouterApiKey:
-      overrides.openRouterApiKey ?? process.env.OPENROUTER_API_KEY,
-    geminiApiKey: overrides.geminiApiKey ?? process.env.GEMINI_API_KEY,
+      overrides.openRouterApiKey ?? readEnv("OPENROUTER_API_KEY"),
+    geminiApiKey: overrides.geminiApiKey ?? readEnv("GEMINI_API_KEY"),
     openRouterBaseUrl:
-      overrides.openRouterBaseUrl ?? process.env.OPENROUTER_BASE_URL,
-    geminiBaseUrl: overrides.geminiBaseUrl ?? process.env.GEMINI_BASE_URL,
+      overrides.openRouterBaseUrl ?? readEnv("OPENROUTER_BASE_URL"),
+    geminiBaseUrl: overrides.geminiBaseUrl ?? readEnv("GEMINI_BASE_URL"),
+    openRouterHttpReferer:
+      overrides.openRouterHttpReferer ?? readEnv("OPENROUTER_HTTP_REFERER"),
+    openRouterAppName:
+      overrides.openRouterAppName ??
+      readEnv("OPENROUTER_APP_NAME") ??
+      "PetAI Computer Agent",
   };
 }
 

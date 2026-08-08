@@ -6,6 +6,7 @@ import {
   countConsecutiveFailedRepeats,
   countConsecutiveSameActions,
   summarizeHistoryForPrompt,
+  stripScreenshotImage,
 } from "../src/memory/index.js";
 import type { ActionResult, ComputerAction } from "../src/types/index.js";
 
@@ -28,6 +29,51 @@ describe("task memory & loop detection", () => {
     state = recordPlannedActions(state, actions, "running");
     expect(state.iteration).toBe(1);
     expect(state.previousActions).toHaveLength(1);
+  });
+
+  it("records action results", () => {
+    let state = createTaskState({ userInstruction: "test" });
+    state = recordActionResults(state, [
+      {
+        action: { type: "WAIT", params: { ms: 100 } },
+        success: true,
+        executedAt: new Date().toISOString(),
+      },
+    ]);
+    expect(state.actionResults).toHaveLength(1);
+  });
+
+  it("strips screenshot image bytes from task state", () => {
+    const stripped = stripScreenshotImage({
+      width: 1920,
+      height: 1080,
+      image: "data:image/png;base64," + "a".repeat(5000),
+    });
+    expect(stripped.image).toBe("[stripped]");
+    expect(stripped.width).toBe(1920);
+
+    const state = createTaskState({
+      userInstruction: "x",
+      screenshot: {
+        width: 10,
+        height: 10,
+        image: "data:image/png;base64,aaaa",
+      },
+    });
+    expect(state.currentScreenshot?.image).toBe("[stripped]");
+  });
+
+  it("task state is JSON-serializable", () => {
+    let state = createTaskState({ userInstruction: "Open YouTube" });
+    state = recordPlannedActions(
+      state,
+      [{ type: "OPEN_APP", params: { app: "Google Chrome" } }],
+      "running",
+    );
+    const json = JSON.stringify(state);
+    const restored = JSON.parse(json);
+    expect(restored.userInstruction).toBe("Open YouTube");
+    expect(restored.iteration).toBe(1);
   });
 
   it("detects consecutive failed repeats", () => {
@@ -57,7 +103,7 @@ describe("task memory & loop detection", () => {
     ];
     const { count, fingerprint } = countConsecutiveFailedRepeats(results);
     expect(count).toBe(3);
-    expect(fingerprint).toContain("CLICK");
+    expect(fingerprint).toBe("CLICK:10:10:left");
   });
 
   it("detects consecutive identical actions", () => {
@@ -69,11 +115,14 @@ describe("task memory & loop detection", () => {
     expect(countConsecutiveSameActions(actions).count).toBe(3);
   });
 
-  it("summarizes history for prompts", () => {
+  it("summarizes history for prompts without dumping TYPE_TEXT plaintext", () => {
     let state = createTaskState({ userInstruction: "Open YouTube" });
     state = recordPlannedActions(
       state,
-      [{ type: "OPEN_APP", params: { app: "Google Chrome" } }],
+      [
+        { type: "OPEN_APP", params: { app: "Google Chrome" } },
+        { type: "TYPE_TEXT", params: { text: "super-secret-token" } },
+      ],
       "running",
     );
     state = recordActionResults(state, [
@@ -86,6 +135,8 @@ describe("task memory & loop detection", () => {
     const summary = summarizeHistoryForPrompt(state);
     expect(summary).toContain("Open YouTube");
     expect(summary).toContain("OPEN_APP");
+    expect(summary).toContain("TYPE_TEXT fp=");
+    expect(summary).not.toContain("super-secret-token");
     expect(summary).toContain("success");
   });
 });

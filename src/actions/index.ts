@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ComputerAction, ActionType } from "../types/index.js";
 import {
   ClickParamsSchema,
@@ -51,7 +52,7 @@ export function isSupportedActionType(type: string): type is ActionType {
  * Throws ZodError on invalid shape.
  */
 export function parseAction(raw: unknown): ComputerAction {
-  return ComputerActionSchema.parse(raw);
+  return ComputerActionSchema.parse(raw) as ComputerAction;
 }
 
 /**
@@ -59,23 +60,59 @@ export function parseAction(raw: unknown): ComputerAction {
  */
 export function tryParseAction(raw: unknown): ComputerAction | null {
   const result = ComputerActionSchema.safeParse(raw);
-  return result.success ? result.data : null;
+  return result.success ? (result.data as ComputerAction) : null;
 }
 
+function normalizeKeyToken(key: string): string {
+  return key
+    .trim()
+    .toLowerCase()
+    .replace(/^control$/, "ctrl")
+    .replace(/^cmd$/, "meta")
+    .replace(/^command$/, "meta")
+    .replace(/^option$/, "alt")
+    .replace(/^return$/, "enter");
+}
+
+/** Short stable hash for TYPE_TEXT fingerprints (avoids storing plaintext). */
+export function hashTextFingerprint(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex").slice(0, 16);
+}
+
+/**
+ * Deterministic action fingerprint for loop detection.
+ * Examples: CLICK:500:300:left | TYPE_TEXT:<hash> | HOTKEY:ctrl+l
+ */
 export function actionFingerprint(action: ComputerAction): string {
-  return `${action.type}:${stableStringify(action.params)}`;
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
+  switch (action.type) {
+    case "CLICK":
+    case "DOUBLE_CLICK": {
+      const button = normalizeKeyToken(action.params.button ?? "LEFT");
+      return `${action.type}:${action.params.x}:${action.params.y}:${button}`;
+    }
+    case "MOVE_MOUSE":
+      return `${action.type}:${action.params.x}:${action.params.y}`;
+    case "TYPE_TEXT":
+      return `TYPE_TEXT:${hashTextFingerprint(action.params.text)}`;
+    case "KEY_PRESS":
+      return `KEY_PRESS:${normalizeKeyToken(action.params.key)}`;
+    case "HOTKEY":
+      return `HOTKEY:${action.params.keys.map(normalizeKeyToken).join("+")}`;
+    case "OPEN_APP":
+      return `OPEN_APP:${action.params.app.trim().toLowerCase()}`;
+    case "WAIT":
+      return `WAIT:${action.params.ms}`;
+    case "SCREENSHOT":
+      return `SCREENSHOT:${action.params.reason ?? ""}`;
+    case "DONE":
+      return `DONE:${action.params.summary ?? ""}`;
+    case "ASK_USER":
+      return `ASK_USER:${hashTextFingerprint(action.params.question)}`;
+    default: {
+      const _exhaustive: never = action;
+      return String(_exhaustive);
+    }
   }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(",")}]`;
-  }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
 }
 
 export function validateActionParams(

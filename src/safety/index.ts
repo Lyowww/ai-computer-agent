@@ -21,9 +21,11 @@ export interface SafetyCheckResult {
 /** Patterns that look like shell / script execution attempts in TYPE_TEXT. */
 const SHELL_INJECTION_PATTERNS: RegExp[] = [
   /(?:^|[\s;`])(?:sudo|rm\s+-rf|chmod\s|chown\s|mkfs|dd\s+if=)/i,
-  /(?:^|[\s;`])(?:curl|wget|powershell|cmd\.exe|bash\s+-c|sh\s+-c|osascript)/i,
+  /(?:^|[\s;`])(?:curl|wget|powershell|pwsh|cmd\.exe|bash\s+-c|sh\s+-c|osascript|osascript\s+-e)/i,
   /(?:^|[\s;`])(?:eval\s*\(|Function\s*\(|require\s*\(|import\s*\()/i,
+  /(?:^|[\s;`])(?:python(?:3)?\s+-c|node\s+-e|perl\s+-e|ruby\s+-e)/i,
   /(?:^|[\s;`])(?:DROP\s+TABLE|DELETE\s+FROM\s+\w+)/i,
+  /(?:tell\s+application\s+|do\s+shell\s+script\s+)/i,
 ];
 
 /** Apps that must never be opened automatically. */

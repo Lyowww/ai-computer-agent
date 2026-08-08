@@ -8,6 +8,9 @@ export interface CreateProviderOptions {
   geminiApiKey?: string;
   openRouterBaseUrl?: string;
   geminiBaseUrl?: string;
+  openRouterHttpReferer?: string;
+  openRouterAppName?: string;
+  timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -22,13 +25,16 @@ export function createAiProvider(options: CreateProviderOptions): AiProvider {
         apiKey: options.openRouterApiKey ?? "",
         baseUrl: options.openRouterBaseUrl,
         fetchImpl: options.fetchImpl,
-        siteName: "PETAI Computer Agent",
+        siteUrl: options.openRouterHttpReferer,
+        siteName: options.openRouterAppName ?? "PetAI Computer Agent",
+        timeoutMs: options.timeoutMs,
       });
     case "gemini":
       return new GeminiProvider({
         apiKey: options.geminiApiKey ?? "",
         baseUrl: options.geminiBaseUrl,
         fetchImpl: options.fetchImpl,
+        timeoutMs: options.timeoutMs,
       });
     default: {
       const _exhaustive: never = options.provider;
@@ -47,6 +53,9 @@ export function createAiProviderFromConfig(
     geminiApiKey: config.geminiApiKey,
     openRouterBaseUrl: config.openRouterBaseUrl,
     geminiBaseUrl: config.geminiBaseUrl,
+    openRouterHttpReferer: config.openRouterHttpReferer,
+    openRouterAppName: config.openRouterAppName,
+    timeoutMs: config.timeoutMs,
     fetchImpl,
   });
 }

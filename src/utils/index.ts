@@ -57,16 +57,6 @@ export function isCoordinateInBounds(
   );
 }
 
-export function clampCoordinate(
-  value: number,
-  maxExclusive: number,
-): number {
-  if (!Number.isFinite(value)) return 0;
-  if (value < 0) return 0;
-  if (value >= maxExclusive) return Math.max(0, maxExclusive - 1);
-  return Math.round(value);
-}
-
 export function createId(prefix = "task"): string {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${prefix}_${Date.now().toString(36)}_${rand}`;
@@ -78,30 +68,78 @@ export function nowIso(): string {
 
 /**
  * Extract a JSON object from model output that may include markdown fences
- * or surrounding prose.
+ * or surrounding prose. Never executes content — parse only.
  */
 export function extractJsonObject(text: string): unknown {
+  if (typeof text !== "string" || text.trim().length === 0) {
+    throw new Error("Unable to extract JSON object from empty model response");
+  }
+
   const trimmed = text.trim();
 
-  // Direct parse
+  // 1. Direct parse
   try {
     return JSON.parse(trimmed);
   } catch {
     // continue
   }
 
-  // Fenced code block
+  // 2. Fenced code block (```json ... ``` or ``` ... ```)
   const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
   if (fence?.[1]) {
-    return JSON.parse(fence[1].trim());
+    try {
+      return JSON.parse(fence[1].trim());
+    } catch {
+      // continue
+    }
   }
 
-  // First {...} object
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return JSON.parse(trimmed.slice(start, end + 1));
+  // 3. First balanced {...} object (handles trailing prose)
+  const extracted = extractBalancedObject(trimmed);
+  if (extracted !== null) {
+    try {
+      return JSON.parse(extracted);
+    } catch {
+      // continue
+    }
   }
 
   throw new Error("Unable to extract JSON object from model response");
+}
+
+function extractBalancedObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth++;
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
 }

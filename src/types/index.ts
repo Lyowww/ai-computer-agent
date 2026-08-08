@@ -217,7 +217,8 @@ export interface AiCompletionResponse {
 }
 
 export interface AiProvider {
-  readonly name: AiProviderName;
+  /** Provider identifier — built-ins use AiProviderName; mocks may use any string. */
+  readonly name: string;
   complete(request: AiCompletionRequest): Promise<AiCompletionResponse>;
 }
 
@@ -226,8 +227,14 @@ export interface OrchestratorConfig {
   model: string;
   maxIterations: number;
   maxSameActionRetries: number;
+  /** Provider HTTP timeout in milliseconds. */
+  timeoutMs: number;
   openRouterApiKey?: string;
   geminiApiKey?: string;
   openRouterBaseUrl?: string;
   geminiBaseUrl?: string;
+  /** Optional OpenRouter HTTP-Referer header. */
+  openRouterHttpReferer?: string;
+  /** Optional OpenRouter X-Title header. */
+  openRouterAppName?: string;
 }

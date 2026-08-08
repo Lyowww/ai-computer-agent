@@ -5,14 +5,26 @@ import type {
   AiMessageContent,
   AiProvider,
 } from "../../types/index.js";
+import {
+  ProviderError,
+  fetchWithTimeout,
+  mapHttpStatusToProviderError,
+  sanitizeProviderErrorText,
+  withRetries,
+} from "../errors.js";
 
 export interface OpenRouterConfig {
   apiKey: string;
   baseUrl?: string;
-  /** Optional HTTP-Referer / X-Title headers for OpenRouter rankings. */
+  /** Optional HTTP-Referer header for OpenRouter rankings. */
   siteUrl?: string;
+  /** Optional X-Title header for OpenRouter rankings. */
   siteName?: string;
   fetchImpl?: typeof fetch;
+  /** Request timeout in milliseconds. */
+  timeoutMs?: number;
+  /** Max attempts for retryable failures (429 / 5xx / network). */
+  maxRetries?: number;
 }
 
 interface OpenAIStyleMessage {
@@ -50,6 +62,24 @@ function toOpenAIMessages(messages: AiChatMessage[]): OpenAIStyleMessage[] {
   }));
 }
 
+function extractErrorMessage(raw: unknown): string {
+  if (!raw || typeof raw !== "object") return "unknown error";
+  const obj = raw as {
+    error?: { message?: string } | string;
+    message?: string;
+  };
+  if (typeof obj.error === "string") return obj.error;
+  if (obj.error && typeof obj.error === "object" && obj.error.message) {
+    return obj.error.message;
+  }
+  if (typeof obj.message === "string") return obj.message;
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return "unknown error";
+  }
+}
+
 /**
  * OpenRouter provider — OpenAI-compatible chat completions with vision.
  * https://openrouter.ai/docs
@@ -61,10 +91,17 @@ export class OpenRouterProvider implements AiProvider {
   private readonly siteUrl?: string;
   private readonly siteName?: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
+  private readonly maxRetries: number;
 
   constructor(config: OpenRouterConfig) {
     if (!config.apiKey) {
-      throw new Error("OPENROUTER_API_KEY is required for OpenRouterProvider");
+      throw new ProviderError({
+        code: "MISSING_API_KEY",
+        message: "OPENROUTER_API_KEY is required for OpenRouterProvider",
+        provider: "openrouter",
+        retryable: false,
+      });
     }
     this.apiKey = config.apiKey;
     this.baseUrl = (config.baseUrl ?? "https://openrouter.ai/api/v1").replace(
@@ -74,9 +111,21 @@ export class OpenRouterProvider implements AiProvider {
     this.siteUrl = config.siteUrl;
     this.siteName = config.siteName;
     this.fetchImpl = config.fetchImpl ?? fetch;
+    this.timeoutMs = config.timeoutMs ?? 60_000;
+    this.maxRetries = config.maxRetries ?? 3;
   }
 
   async complete(request: AiCompletionRequest): Promise<AiCompletionResponse> {
+    return withRetries((attempt) => this.completeOnce(request, attempt), {
+      maxAttempts: this.maxRetries,
+      baseDelayMs: 500,
+    });
+  }
+
+  private async completeOnce(
+    request: AiCompletionRequest,
+    _attempt: number,
+  ): Promise<AiCompletionResponse> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
       "Content-Type": "application/json",
@@ -95,40 +144,86 @@ export class OpenRouterProvider implements AiProvider {
       body.response_format = { type: "json_object" };
     }
 
-    const res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(
+        this.fetchImpl,
+        `${this.baseUrl}/chat/completions`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        },
+        this.timeoutMs,
+        "openrouter",
+      );
+    } catch (err) {
+      if (err instanceof ProviderError) throw err;
+      throw new ProviderError({
+        code: "NETWORK",
+        message: `OpenRouter network error: ${
+          err instanceof Error
+            ? sanitizeProviderErrorText(err.message)
+            : "unknown"
+        }`,
+        provider: "openrouter",
+        retryable: true,
+        cause: err,
+      });
+    }
 
-    const raw = (await res.json()) as Record<string, unknown>;
+    let raw: unknown;
+    try {
+      raw = await res.json();
+    } catch (err) {
+      throw new ProviderError({
+        code: "MALFORMED_RESPONSE",
+        message: "OpenRouter returned a non-JSON response body",
+        provider: "openrouter",
+        status: res.status,
+        retryable: res.status >= 500,
+        cause: err,
+      });
+    }
 
     if (!res.ok) {
-      const errMsg =
-        (raw as { error?: { message?: string } })?.error?.message ??
-        JSON.stringify(raw);
-      throw new Error(`OpenRouter API error (${res.status}): ${errMsg}`);
+      throw mapHttpStatusToProviderError(
+        "openrouter",
+        res.status,
+        extractErrorMessage(raw),
+      );
     }
 
-    const choices = raw.choices as
-      | Array<{ message?: { content?: string | null } }>
-      | undefined;
-    const content = choices?.[0]?.message?.content;
+    const choices = (raw as { choices?: unknown }).choices;
+    if (!Array.isArray(choices) || choices.length === 0) {
+      throw new ProviderError({
+        code: "MALFORMED_RESPONSE",
+        message: "OpenRouter returned no completion choices",
+        provider: "openrouter",
+        retryable: false,
+      });
+    }
+
+    const content = (
+      choices[0] as { message?: { content?: string | null } }
+    )?.message?.content;
     if (typeof content !== "string" || content.length === 0) {
-      throw new Error("OpenRouter returned empty completion content");
+      throw new ProviderError({
+        code: "MALFORMED_RESPONSE",
+        message: "OpenRouter returned empty completion content",
+        provider: "openrouter",
+        retryable: false,
+      });
     }
 
-    const usage = raw.usage as
-      | {
-          prompt_tokens?: number;
-          completion_tokens?: number;
-          total_tokens?: number;
-        }
-      | undefined;
+    const usage = (raw as { usage?: Record<string, number>; model?: string })
+      .usage;
 
     return {
       content,
-      model: String(raw.model ?? request.model),
+      model: String(
+        (raw as { model?: string }).model ?? request.model,
+      ),
       usage: usage
         ? {
             promptTokens: usage.prompt_tokens,

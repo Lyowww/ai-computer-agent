@@ -4,9 +4,8 @@ import type {
   AiProvider,
   Screenshot,
 } from "../types/index.js";
-import { toImageDataUrl } from "../utils/index.js";
+import { toImageDataUrl, extractJsonObject } from "../utils/index.js";
 import { buildSystemPrompt, buildUserPrompt } from "../prompts/index.js";
-import { extractJsonObject } from "../utils/index.js";
 import { AiPlanResponseSchema } from "../schemas/index.js";
 import type { ParsedAiPlanResponse } from "../schemas/index.js";
 
@@ -40,6 +39,7 @@ export async function planWithVision(
 
   const imageUrl = toImageDataUrl(request.screenshot);
 
+  // Screenshot must be sent as an image part — never as plain text.
   const userContent: AiMessageContent[] = [
     { type: "text", text: userText },
     { type: "image", url: imageUrl },

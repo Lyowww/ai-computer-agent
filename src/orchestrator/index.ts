@@ -12,6 +12,7 @@ import { createAiProviderFromConfig } from "../ai/index.js";
 import { loadConfig, assertProviderCredentials } from "../utils/config.js";
 import { planWithVision } from "../vision/index.js";
 import { validateActionSafety } from "../safety/index.js";
+import { actionFingerprint } from "../actions/index.js";
 import {
   createTaskState,
   updateScreenshot,
@@ -32,6 +33,7 @@ export interface OrchestratorOptions {
 /**
  * Iterative AI orchestrator.
  * Produces validated structured actions — never controls the computer directly.
+ * Each planNextAction() call is a single planning step (not an infinite loop).
  */
 export class Orchestrator {
   private readonly config: OrchestratorConfig;
@@ -161,7 +163,7 @@ export class Orchestrator {
       return { taskState: state, response };
     }
 
-    let plan: AiPlanResponse = planParse.data;
+    let plan: AiPlanResponse = planParse.data as AiPlanResponse;
 
     // --- Safety layer ---
     const safety = validateActionSafety(plan.actions, screenshot, {
@@ -201,22 +203,16 @@ export class Orchestrator {
     // Normalize status vs terminal actions
     plan = normalizePlanStatus(plan);
 
-    // Prevent proposing another identical action when already looping
+    // Soft loop check — identical successful-looking repeats near the limit
     if (
       plan.actions.length > 0 &&
       sameActions.fingerprint &&
-      sameActions.count >= this.config.maxSameActionRetries - 1
+      sameActions.count >= 2
     ) {
-      const nextFp = `${plan.actions[0].type}:${JSON.stringify(plan.actions[0].params)}`;
-      // Soft check — if model proposes same action again near the limit, escalate
-      if (
-        sameActions.count >= 2 &&
-        plan.actions.every(
-          (a) =>
-            `${a.type}:${JSON.stringify(a.params)}` ===
-            `${state.previousActions[state.previousActions.length - 1]?.type}:${JSON.stringify(state.previousActions[state.previousActions.length - 1]?.params)}`,
-        )
-      ) {
+      const proposedSame = plan.actions.every(
+        (a) => actionFingerprint(a) === sameActions.fingerprint,
+      );
+      if (proposedSame) {
         plan = {
           status: "NEEDS_USER_INPUT",
           reasoning_summary: "Avoiding repeated identical action.",
@@ -226,7 +222,7 @@ export class Orchestrator {
               params: {
                 question:
                   "I am about to repeat the same action. Should I continue or try a different approach?",
-                reason: `Potential loop: ${nextFp}`,
+                reason: `Potential loop: ${sameActions.fingerprint}`,
               },
             },
           ],

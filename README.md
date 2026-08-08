@@ -71,12 +71,15 @@ cp .env.example .env
 Edit `.env`:
 
 ```bash
-AI_PROVIDER=openrouter          # or gemini
-AI_MODEL=openai/gpt-4o          # provider-specific model id
-OPENROUTER_API_KEY=...          # required for openrouter
-GEMINI_API_KEY=...              # required for gemini
+AI_PROVIDER=openrouter                 # or gemini
+AI_MODEL=google/gemini-2.5-flash       # provider-specific model id
+OPENROUTER_API_KEY=...                 # required for openrouter
+OPENROUTER_HTTP_REFERER=               # optional
+OPENROUTER_APP_NAME=PetAI Computer Agent
+GEMINI_API_KEY=...                     # required for gemini
 MAX_AGENT_ITERATIONS=30
 MAX_SAME_ACTION_RETRIES=3
+AI_TIMEOUT_MS=60000
 ```
 
 ```bash
@@ -207,7 +210,7 @@ Set `AI_PROVIDER` + `AI_MODEL` (and the matching API key). The orchestrator depe
 
 | Provider | Env key | Example model |
 |----------|---------|---------------|
-| `openrouter` | `OPENROUTER_API_KEY` | `openai/gpt-4o`, `google/gemini-2.0-flash-001` |
+| `openrouter` | `OPENROUTER_API_KEY` | `google/gemini-2.5-flash`, `openai/gpt-4o` |
 | `gemini` | `GEMINI_API_KEY` | `gemini-2.0-flash`, `gemini-1.5-pro` |
 
 ## Connecting to a backend later

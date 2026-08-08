@@ -8,6 +8,11 @@ import type {
 import { actionFingerprint } from "../actions/index.js";
 import { createId, nowIso } from "../utils/index.js";
 
+/** Cap retained history to avoid unbounded memory growth. */
+const MAX_PREVIOUS_ACTIONS = 50;
+const MAX_ACTION_RESULTS = 50;
+const MAX_NOTES = 20;
+
 export interface CreateTaskOptions {
   taskId?: string;
   userInstruction: string;
@@ -19,7 +24,9 @@ export function createTaskState(options: CreateTaskOptions): TaskState {
   return {
     taskId: options.taskId ?? createId("task"),
     userInstruction: options.userInstruction,
-    currentScreenshot: options.screenshot ?? null,
+    currentScreenshot: options.screenshot
+      ? stripScreenshotImage(options.screenshot)
+      : null,
     previousActions: [],
     actionResults: [],
     iteration: 0,
@@ -31,13 +38,26 @@ export function createTaskState(options: CreateTaskOptions): TaskState {
   };
 }
 
+/**
+ * Keep dimensions for context, but never retain raw screenshot bytes in task state.
+ */
+export function stripScreenshotImage(screenshot: Screenshot): Screenshot {
+  return {
+    width: screenshot.width,
+    height: screenshot.height,
+    image: "[stripped]",
+    mimeType: screenshot.mimeType,
+  };
+}
+
 export function updateScreenshot(
   state: TaskState,
   screenshot: Screenshot,
 ): TaskState {
   return {
     ...state,
-    currentScreenshot: screenshot,
+    // Store dimensions only — full image is passed per-request to planNextAction.
+    currentScreenshot: stripScreenshotImage(screenshot),
     updatedAt: nowIso(),
   };
 }
@@ -47,9 +67,12 @@ export function recordPlannedActions(
   actions: ComputerAction[],
   status: TaskStatus,
 ): TaskState {
+  const previousActions = [...state.previousActions, ...actions].slice(
+    -MAX_PREVIOUS_ACTIONS,
+  );
   return {
     ...state,
-    previousActions: [...state.previousActions, ...actions],
+    previousActions,
     iteration: state.iteration + 1,
     status,
     updatedAt: nowIso(),
@@ -60,9 +83,12 @@ export function recordActionResults(
   state: TaskState,
   results: ActionResult[],
 ): TaskState {
+  const actionResults = [...state.actionResults, ...results].slice(
+    -MAX_ACTION_RESULTS,
+  );
   return {
     ...state,
-    actionResults: [...state.actionResults, ...results],
+    actionResults,
     updatedAt: nowIso(),
   };
 }
@@ -141,6 +167,16 @@ export function countConsecutiveSameActions(
   return { count, fingerprint: lastFp };
 }
 
+function summarizeAction(action: ComputerAction): string {
+  if (action.type === "TYPE_TEXT") {
+    return `TYPE_TEXT fp=${actionFingerprint(action)} len=${action.params.text.length}`;
+  }
+  if (action.type === "ASK_USER") {
+    return `ASK_USER fp=${actionFingerprint(action)}`;
+  }
+  return `${action.type} ${JSON.stringify(action.params)}`;
+}
+
 export function summarizeHistoryForPrompt(state: TaskState): string {
   const lines: string[] = [];
   lines.push(`Task ID: ${state.taskId}`);
@@ -152,7 +188,7 @@ export function summarizeHistoryForPrompt(state: TaskState): string {
     lines.push("Previous actions:");
     const recent = state.previousActions.slice(-12);
     for (const action of recent) {
-      lines.push(`- ${action.type} ${JSON.stringify(action.params)}`);
+      lines.push(`- ${summarizeAction(action)}`);
     }
   }
 
@@ -161,8 +197,15 @@ export function summarizeHistoryForPrompt(state: TaskState): string {
     const recent = state.actionResults.slice(-12);
     for (const result of recent) {
       lines.push(
-        `- ${result.action.type}: ${result.success ? "success" : "FAILED"}${result.error ? ` (${result.error})` : ""}`,
+        `- ${result.action.type} [${actionFingerprint(result.action)}]: ${result.success ? "success" : "FAILED"}${result.error ? ` (${result.error})` : ""}`,
       );
+    }
+  }
+
+  if (state.notes && state.notes.length > 0) {
+    lines.push("Notes:");
+    for (const note of state.notes.slice(-MAX_NOTES)) {
+      lines.push(`- ${note}`);
     }
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Orchestrator } from "../src/orchestrator/index.js";
+import { Orchestrator, planNextAction } from "../src/orchestrator/index.js";
 import type {
   AiCompletionRequest,
   AiCompletionResponse,
@@ -23,13 +23,13 @@ function mockProvider(
   options?: { fail?: boolean },
 ): AiProvider {
   return {
-    name: "openrouter",
+    name: "mock",
     async complete(_req: AiCompletionRequest): Promise<AiCompletionResponse> {
       if (options?.fail) {
         throw new Error("upstream down");
       }
       return {
-        content: JSON.stringify(plan),
+        content: typeof plan === "string" ? plan : JSON.stringify(plan),
         model: "mock-model",
       };
     },
@@ -37,7 +37,7 @@ function mockProvider(
 }
 
 describe("orchestrator.planNextAction", () => {
-  it("returns validated OPEN_APP action from vision plan", async () => {
+  it("returns validated OPEN_APP action from vision plan (first action)", async () => {
     const orchestrator = new Orchestrator({
       provider: mockProvider({
         status: "ACTION_REQUIRED",
@@ -66,6 +66,48 @@ describe("orchestrator.planNextAction", () => {
     });
     expect(result.taskState.iteration).toBe(1);
     expect(result.taskState.status).toBe("running");
+    expect(result.taskState.currentScreenshot?.image).toBe("[stripped]");
+  });
+
+  it("continues with taskState after recordActionResults", async () => {
+    const orchestrator = new Orchestrator({
+      provider: mockProvider({
+        status: "ACTION_REQUIRED",
+        reasoning_summary: "Address bar ready.",
+        actions: [
+          { type: "TYPE_TEXT", params: { text: "youtube.com" } },
+        ],
+        message: "Typing URL.",
+      }),
+      config: {
+        maxIterations: 30,
+        maxSameActionRetries: 3,
+        openRouterApiKey: "unused",
+      },
+    });
+
+    let { taskState, response } = await orchestrator.planNextAction({
+      userInstruction: "Open youtube.com",
+      screenshot,
+    });
+
+    taskState = recordActionResults(taskState, [
+      {
+        action: response.actions[0],
+        success: true,
+        executedAt: new Date().toISOString(),
+      },
+    ]);
+
+    ({ taskState, response } = await orchestrator.planNextAction({
+      userInstruction: taskState.userInstruction,
+      screenshot,
+      taskState,
+    }));
+
+    expect(response.status).toBe("ACTION_REQUIRED");
+    expect(taskState.iteration).toBe(2);
+    expect(taskState.actionResults).toHaveLength(1);
   });
 
   it("marks COMPLETED when DONE is returned", async () => {
@@ -148,7 +190,6 @@ describe("orchestrator.planNextAction", () => {
       })
     ).taskState;
 
-    // Simulate three failed executions of the same action
     state = recordActionResults(state, [
       {
         action: click,
@@ -185,7 +226,9 @@ describe("orchestrator.planNextAction", () => {
       provider: mockProvider({
         status: "ACTION_REQUIRED",
         reasoning_summary: "click",
-        actions: [{ type: "CLICK", params: { x: 99999, y: 10, button: "LEFT" } }],
+        actions: [
+          { type: "CLICK", params: { x: 99999, y: 10, button: "LEFT" } },
+        ],
         message: "clicking",
       }),
       config: {
@@ -201,7 +244,9 @@ describe("orchestrator.planNextAction", () => {
     });
 
     expect(result.response.status).toBe("FAILED");
-    expect(result.response.message).toMatch(/Safety violation|out of bounds|COORDINATE/i);
+    expect(result.response.message).toMatch(
+      /Safety violation|out of bounds|COORDINATE/i,
+    );
   });
 
   it("escalates destructive instructions to ASK_USER", async () => {
@@ -209,7 +254,9 @@ describe("orchestrator.planNextAction", () => {
       provider: mockProvider({
         status: "ACTION_REQUIRED",
         reasoning_summary: "delete files",
-        actions: [{ type: "CLICK", params: { x: 100, y: 100, button: "LEFT" } }],
+        actions: [
+          { type: "CLICK", params: { x: 100, y: 100, button: "LEFT" } },
+        ],
         message: "deleting",
       }),
       config: {
@@ -245,5 +292,43 @@ describe("orchestrator.planNextAction", () => {
 
     expect(result.response.status).toBe("FAILED");
     expect(result.response.message).toMatch(/upstream down/);
+  });
+
+  it("returns FAILED for malformed model JSON", async () => {
+    const orchestrator = new Orchestrator({
+      provider: mockProvider("definitely not json {{{"),
+      config: {
+        maxIterations: 30,
+        maxSameActionRetries: 3,
+        openRouterApiKey: "unused",
+      },
+    });
+
+    const result = await orchestrator.planNextAction({
+      userInstruction: "open chrome",
+      screenshot,
+    });
+
+    expect(result.response.status).toBe("FAILED");
+    expect(result.response.message).toMatch(/non-JSON|AI planning failed/i);
+  });
+
+  it("supports functional planNextAction API", async () => {
+    const result = await planNextAction(
+      {
+        userInstruction: "Open Chrome",
+        screenshot,
+      },
+      {
+        provider: mockProvider({
+          status: "ACTION_REQUIRED",
+          reasoning_summary: "Opening Chrome.",
+          actions: [{ type: "OPEN_APP", params: { app: "Chrome" } }],
+          message: "Opening Chrome.",
+        }),
+        config: { openRouterApiKey: "unused", model: "mock" },
+      },
+    );
+    expect(result.response.actions[0]?.type).toBe("OPEN_APP");
   });
 });
