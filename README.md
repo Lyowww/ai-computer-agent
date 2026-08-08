@@ -213,15 +213,25 @@ Set `AI_PROVIDER` + `AI_MODEL` (and the matching API key). The orchestrator depe
 | `openrouter` | `OPENROUTER_API_KEY` | `google/gemini-2.5-flash`, `openai/gpt-4o` |
 | `gemini` | `GEMINI_API_KEY` | `gemini-2.0-flash`, `gemini-1.5-pro` |
 
-## Connecting to a backend later
+## Connecting to a backend
 
-Typical integration:
+### Option A — HTTP adapter (recommended for local stack)
+
+```bash
+npm run start:server
+# listens on http://localhost:4000
+# POST /v1/plan   GET /health
+```
+
+Set backend `AI_SERVICE_URL=http://localhost:4000`. OpenRouter/Gemini keys stay in this process only.
+
+### Option B — In-process
 
 1. Backend receives chat message + latest screenshot from the desktop agent  
 2. Backend calls `planNextAction(...)`  
 3. Backend forwards `response.actions` to the desktop agent  
 4. Desktop agent executes, captures a new screenshot, reports `ActionResult`s  
-5. Backend calls `planNextAction` again with updated `taskState` until `COMPLETED` / `FAILED` / `NEEDS_USER_INPUT`
+5. Backend calls `planNextAction` again with updated history until `COMPLETED` / `FAILED` / `NEEDS_USER_INPUT`
 
 ## License
 
