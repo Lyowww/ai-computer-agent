@@ -9,7 +9,14 @@ const MULTI_STEP_CONNECTOR =
   /\b(and then|then|after that|afterwards|followed by|next|finally)\b/i;
 
 const ACTION_VERB =
-  /\b(open|launch|start|click|double[-\s]?click|type|press|hit|go to|navigate|visit|create|write|enter|select|scroll|drag|close|quit|delete|remove|move|copy|paste|search|download|upload|login|log in|sign in|refresh|reload|focus|switch|install|save|send|submit|fill)\b/gi;
+  /\b(open|launch|start|click|double[-\s]?click|type|press|hit|go to|navigate|visit|create|write|enter|select|scroll|drag|close|quit|delete|remove|move|copy|paste|search|download|upload|login|log in|sign in|refresh|reload|focus|switch|install|save|send|submit|fill|screenshot|capture)\b/gi;
+
+/** Compact multi-goal phrases without an explicit “and then” connector. */
+const COMPACT_MULTI_STEP =
+  /\b(open|launch|start)\b[\s\S]{0,80}\b(scroll|type|click|screenshot|capture|go to|navigate)\b/i;
+
+const SCROLL_THEN_SCREENSHOT =
+  /\bscroll\b[\s\S]{0,80}\b(screenshot|capture|give\s+me\s+(a\s+)?(?:screen[\s-]?shot|picture))\b/i;
 
 /**
  * Infer whether a user instruction is a single atomic action or a multi-step goal.
@@ -20,6 +27,10 @@ export function inferExecutionMode(instruction: string): ExecutionMode {
   if (!text) return "single_action";
 
   if (MULTI_STEP_CONNECTOR.test(text)) {
+    return "multi_step";
+  }
+
+  if (COMPACT_MULTI_STEP.test(text) || SCROLL_THEN_SCREENSHOT.test(text)) {
     return "multi_step";
   }
 

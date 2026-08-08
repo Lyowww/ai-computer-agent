@@ -41,6 +41,52 @@ export type AfterActionsDecision =
   | { kind: "replan" }
   | { kind: "noop" };
 
+/** True when the user explicitly asked for a screenshot as part of the task. */
+export function instructionRequestsScreenshot(instruction: string): boolean {
+  return /\b(screenshot|screen[\s-]?shot|capture\s+(the\s+)?screen|take\s+(a\s+)?(?:screen[\s-]?shot|picture)|give\s+me\s+(a\s+)?(?:screen[\s-]?shot|picture))\b/i.test(
+    instruction,
+  );
+}
+
+/**
+ * After a successful SCREENSHOT in a multi-step task that requested one,
+ * complete when prior required verbs (open/scroll) already succeeded.
+ * Prevents screenshot → replan → screenshot loops.
+ */
+export function shouldCompleteAfterScreenshotBatch(input: {
+  userInstruction: string;
+  executedActions: ComputerAction[];
+  priorSuccessfulActionTypes?: string[];
+}): boolean {
+  if (!instructionRequestsScreenshot(input.userInstruction)) return false;
+  if (!input.executedActions.some((a) => a.type === "SCREENSHOT")) return false;
+
+  const allTypes = [
+    ...(input.priorSuccessfulActionTypes ?? []),
+    ...input.executedActions.map((a) => a.type),
+  ];
+
+  if (
+    /\bscroll\b/i.test(input.userInstruction) &&
+    !allTypes.includes("SCROLL")
+  ) {
+    return false;
+  }
+
+  // App launch goals (open Slack / launch Telegram) — not UI “open … tab”
+  if (
+    /\b(open|launch|start)\b/i.test(input.userInstruction) &&
+    !/\b(tab|tabs|sidebar|menu|button|link|page|panel|drawer)\b/i.test(
+      input.userInstruction,
+    ) &&
+    !allTypes.includes("OPEN_APP")
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 /**
  * After planned actions finish executing, decide whether the task is done
  * or whether another AI planning cycle is allowed.
@@ -50,6 +96,9 @@ export function decideAfterActionBatch(input: {
   allSucceeded: boolean;
   lastError?: string;
   taskStatus: TaskLifecycleStatus;
+  userInstruction?: string;
+  executedActions?: ComputerAction[];
+  priorSuccessfulActionTypes?: string[];
 }): AfterActionsDecision {
   if (isTerminalTaskStatus(input.taskStatus)) {
     return { kind: "noop" };
@@ -65,6 +114,23 @@ export function decideAfterActionBatch(input: {
     return {
       kind: "fail",
       error: input.lastError ?? "Action failed",
+    };
+  }
+
+  // multi_step: after the requested final screenshot, stop (no screenshot loop)
+  if (
+    input.allSucceeded &&
+    input.userInstruction &&
+    input.executedActions &&
+    shouldCompleteAfterScreenshotBatch({
+      userInstruction: input.userInstruction,
+      executedActions: input.executedActions,
+      priorSuccessfulActionTypes: input.priorSuccessfulActionTypes,
+    })
+  ) {
+    return {
+      kind: "complete",
+      summary: "Final screenshot captured; multi-step task completed",
     };
   }
 

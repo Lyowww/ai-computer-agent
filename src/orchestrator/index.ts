@@ -39,6 +39,7 @@ import {
   resolveContinuationInstruction,
   validateActionAgainstIntent,
   validateOpenAppAction,
+  instructionImpliesScrollToEnd,
   type ClassifiedIntent,
 } from "../intent/index.js";
 
@@ -177,6 +178,11 @@ export class Orchestrator {
       state = { ...state, userInstruction };
     }
 
+    boundaryLog(state.taskId, "TASK", {
+      instruction: userInstruction,
+      executionMode: state.executionMode,
+      iteration: state.iteration,
+    });
     boundaryLog(state.taskId, "USER_INSTRUCTION", {
       instruction: userInstruction,
       rawInstruction: input.userInstruction,
@@ -185,6 +191,7 @@ export class Orchestrator {
       intent: intent.intent,
       scrollDirection: intent.scrollDirection,
       scrollAmount: intent.scrollAmount,
+      scrollToEnd: intent.scrollToEnd,
       targetLabel: intent.targetLabel ?? undefined,
       isContinuation:
         intent.isContinuation ||
@@ -196,6 +203,7 @@ export class Orchestrator {
       instruction: userInstruction,
       scrollDirection: intent.scrollDirection,
       scrollAmount: intent.scrollAmount,
+      scrollToEnd: intent.scrollToEnd,
       targetLabel: intent.targetLabel ?? undefined,
       isContinuation:
         intent.isContinuation ||
@@ -329,6 +337,13 @@ export class Orchestrator {
           intent,
           userInstruction,
         );
+        boundaryLog(state.taskId, "RAW_MODEL_ACTION", {
+          source: "deterministic_intent",
+          actions: deterministic.actions.map((a) => ({
+            type: a.type,
+            params: a.params,
+          })),
+        });
         boundaryLog(state.taskId, "RAW_AI_RESPONSE", {
           source: "deterministic_intent",
           actions: deterministic.actions.map((a) => ({
@@ -352,6 +367,13 @@ export class Orchestrator {
         boundaryLog(state.taskId, "VALIDATED_ACTION", { result: "PASS" });
         boundaryLog(state.taskId, "BACKEND_ACTION", {
           status: deterministic.status,
+          actions: deterministic.actions.map((a) => ({
+            type: a.type,
+            params: a.params,
+          })),
+        });
+        boundaryLog(state.taskId, "EXECUTED_ACTION", {
+          note: "Returned to desktop executor; awaiting ACTION_RESULT",
           actions: deterministic.actions.map((a) => ({
             type: a.type,
             params: a.params,
@@ -482,6 +504,13 @@ export class Orchestrator {
       };
     }
 
+    boundaryLog(state.taskId, "RAW_MODEL_ACTION", {
+      status: rawPlan.status,
+      actions: rawPlan.actions.map((a) => ({
+        type: a.type,
+        params: a.params,
+      })),
+    });
     boundaryLog(state.taskId, "RAW_AI_RESPONSE", {
       status: rawPlan.status,
       reasoning_summary: rawPlan.reasoning_summary,
@@ -692,6 +721,11 @@ export class Orchestrator {
       status: plan.status,
       actions: plan.actions.map((a) => ({ type: a.type, params: a.params })),
     });
+    boundaryLog(state.taskId, "EXECUTED_ACTION", {
+      note: "Returned to desktop executor; awaiting ACTION_RESULT",
+      status: plan.status,
+      actions: plan.actions.map((a) => ({ type: a.type, params: a.params })),
+    });
 
     taskLog(state.taskId, `AI status: ${plan.status}`, {
       actions: plan.actions.map((a) => a.type),
@@ -724,20 +758,24 @@ function buildDeterministicScrollPlan(
   instruction: string,
 ): AiPlanResponse {
   const direction = intent.scrollDirection ?? "down";
-  const amount = intent.scrollAmount ?? 5;
+  const params =
+    intent.scrollToEnd || instructionImpliesScrollToEnd(instruction)
+      ? { direction, toEnd: true as const }
+      : { direction, amount: intent.scrollAmount ?? 5, toEnd: false as const };
   return {
     status: "ACTION_REQUIRED",
-    reasoning_summary: `User requested scroll (${direction}); emitting SCROLL action.`,
+    reasoning_summary: params.toEnd
+      ? `User requested scroll to end (${direction}); emitting SCROLL toEnd.`
+      : `User requested scroll (${direction}); emitting SCROLL action.`,
     actions: [
       {
         type: "SCROLL",
-        params: { direction, amount },
+        params,
       },
     ],
-    message:
-      direction === "down" && /\bbottom\b/i.test(instruction)
-        ? "Scrolling down toward the bottom."
-        : `Scrolling ${direction}.`,
+    message: params.toEnd
+      ? `Scrolling ${direction} to the end.`
+      : `Scrolling ${direction}.`,
   };
 }
 

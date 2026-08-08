@@ -6,8 +6,10 @@ export interface ClassifiedIntent {
   intent: UserIntent;
   /** Direction when intent is SCROLL. */
   scrollDirection?: ScrollDirection;
-  /** Larger amount for “to bottom/top”. */
+  /** Notch count for ordinary scroll (not used when scrollToEnd). */
   scrollAmount?: number;
+  /** True when user asked to scroll to top/bottom/end. */
+  scrollToEnd?: boolean;
   /** Extracted UI target label when applicable. */
   targetLabel?: string | null;
   /** True when the instruction is a retry/continuation of a prior task. */
@@ -108,12 +110,14 @@ function detectScrollDirection(text: string): ScrollDirection {
   return "down";
 }
 
-function detectScrollAmount(text: string, direction: ScrollDirection): number {
-  const extreme =
-    /\b(to\s+(the\s+)?(bottom|top|end|start|beginning)|all\s+the\s+way)\b/i.test(
-      text,
-    );
-  if (extreme) return direction === "up" || direction === "down" ? 25 : 15;
+/** True when the user asked to scroll all the way to an extreme end. */
+export function instructionImpliesScrollToEnd(instruction: string): boolean {
+  return /\b(to\s+(the\s+)?(bottom|top|end|start|beginning)|all\s+the\s+way)\b/i.test(
+    instruction,
+  );
+}
+
+function detectScrollAmount(text: string): number {
   const n = /\b(\d+)\s*(times?|notches?|ticks?|lines?)?\b/i.exec(text);
   if (n?.[1]) {
     const parsed = Number(n[1]);
@@ -344,10 +348,12 @@ export function classifyUserIntent(instruction: string): ClassifiedIntent {
 
   if (/\bscroll\b/i.test(text)) {
     const scrollDirection = detectScrollDirection(text);
+    const scrollToEnd = instructionImpliesScrollToEnd(text);
     return {
       intent: "SCROLL",
       scrollDirection,
-      scrollAmount: detectScrollAmount(text, scrollDirection),
+      scrollToEnd,
+      scrollAmount: scrollToEnd ? undefined : detectScrollAmount(text),
       isContinuation,
     };
   }

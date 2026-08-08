@@ -197,6 +197,13 @@ export function summarizeHistoryForPrompt(state: TaskState): string {
     lines.push(
       "Mode hint: This is a single-action request. Plan only what is needed for this instruction; do not invent follow-up work or verification loops.",
     );
+  } else {
+    lines.push(
+      "Mode hint: MULTI-STEP goal. Continue until EVERY part of the user instruction is done.",
+      "Do NOT return COMPLETED after only the first successful action (e.g. OPEN_APP alone).",
+      "After OPEN_APP/CLICK/SCROLL, wait for ACTION_RESULT + a fresh screenshot before the next step.",
+      "If the user asked for a screenshot at the end, emit SCREENSHOT once prior steps succeed, then COMPLETED with DONE — never screenshot in a loop.",
+    );
   }
 
   // Same-task history only — never conversation messages from other tasks.

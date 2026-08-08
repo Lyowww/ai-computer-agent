@@ -30,6 +30,8 @@ export {
   ScreenshotSchema,
   normalizeRawAction,
   normalizeRawPlan,
+  normalizeScrollParams,
+  SCROLL_AMOUNT_ALIASES,
 } from "./schemas/index.js";
 
 export {
@@ -70,6 +72,8 @@ export {
   looksLikeFakeUserApproval,
   toNeedsUserInputPlan,
   agentStatusToLifecycle,
+  instructionRequestsScreenshot,
+  shouldCompleteAfterScreenshotBatch,
 } from "./execution/index.js";
 export type {
   TaskLifecycleStatus,
@@ -94,6 +98,7 @@ export {
   looksLikeApplicationName,
   extractOpenAppName,
   instructionImpliesUiOpen,
+  instructionImpliesScrollToEnd,
 } from "./intent/index.js";
 export type {
   ClassifiedIntent,

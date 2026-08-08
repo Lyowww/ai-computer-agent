@@ -39,12 +39,121 @@ export const ScrollDirectionSchema = z.preprocess((value) => {
   return value;
 }, z.enum(["up", "down", "left", "right"]));
 
-export const ScrollParamsSchema = z.object({
-  direction: ScrollDirectionSchema.default("down"),
-  amount: z.number().finite().positive().max(100).optional().default(5),
-  x: z.number().finite().optional(),
-  y: z.number().finite().optional(),
-});
+/**
+ * Natural-language amount tokens → numeric wheel notches (nut.js ticks).
+ * Unknown strings are NOT mapped — Zod rejects them.
+ */
+export const SCROLL_AMOUNT_ALIASES: Readonly<Record<string, number>> = {
+  tiny: 1,
+  small: 2,
+  little: 2,
+  medium: 5,
+  normal: 5,
+  default: 5,
+  large: 15,
+  big: 15,
+  huge: 25,
+  far: 20,
+  "a lot": 20,
+  alot: 20,
+};
+
+/** Amount strings that mean scroll-to-extreme, not a notch count. */
+const SCROLL_TO_END_AMOUNT_ALIASES: ReadonlySet<string> = new Set([
+  "bottom",
+  "top",
+  "end",
+  "start",
+  "beginning",
+  "to bottom",
+  "to top",
+  "to end",
+  "to start",
+  "to the bottom",
+  "to the top",
+  "to the end",
+  "to the start",
+  "all the way",
+  "alltheway",
+]);
+
+function normalizeScrollAmountToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Coerce model SCROLL params before Zod:
+ * - numeric strings ("5") → number
+ * - known aliases ("small"/"large") → number
+ * - end semantics ("bottom"/"to bottom") → toEnd: true
+ * - unknown strings left intact so Zod rejects them
+ */
+export function normalizeScrollParams(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const obj = { ...(raw as Record<string, unknown>) };
+
+  if (
+    obj.to_end === true ||
+    obj.scrollToEnd === true ||
+    obj.scroll_to_end === true
+  ) {
+    obj.toEnd = true;
+  }
+  if (typeof obj.toEnd === "string") {
+    const t = obj.toEnd.trim().toLowerCase();
+    if (t === "true" || t === "1" || t === "yes") obj.toEnd = true;
+    else if (t === "false" || t === "0" || t === "no") obj.toEnd = false;
+  }
+
+  if (typeof obj.amount === "string") {
+    const token = normalizeScrollAmountToken(obj.amount);
+    if (/^\d+(\.\d+)?$/.test(token)) {
+      obj.amount = Number(token);
+    } else if (SCROLL_TO_END_AMOUNT_ALIASES.has(token)) {
+      obj.toEnd = true;
+      delete obj.amount;
+    } else if (Object.prototype.hasOwnProperty.call(SCROLL_AMOUNT_ALIASES, token)) {
+      obj.amount = SCROLL_AMOUNT_ALIASES[token];
+    }
+    // else leave as string → Zod number check fails
+  }
+
+  return obj;
+}
+
+export const ScrollParamsSchema = z.preprocess(
+  normalizeScrollParams,
+  z
+    .object({
+      direction: ScrollDirectionSchema.default("down"),
+      amount: z.number().finite().positive().max(100).optional(),
+      toEnd: z.boolean().optional().default(false),
+      x: z.number().finite().optional(),
+      y: z.number().finite().optional(),
+    })
+    .transform((p) => {
+      if (p.toEnd) {
+        return {
+          direction: p.direction,
+          toEnd: true,
+          ...(p.amount !== undefined ? { amount: p.amount } : {}),
+          ...(p.x !== undefined ? { x: p.x } : {}),
+          ...(p.y !== undefined ? { y: p.y } : {}),
+        };
+      }
+      return {
+        direction: p.direction,
+        amount: p.amount ?? 5,
+        toEnd: false,
+        ...(p.x !== undefined ? { x: p.x } : {}),
+        ...(p.y !== undefined ? { y: p.y } : {}),
+      };
+    }),
+);
 
 export const TypeTextParamsSchema = z.object({
   text: z.string().min(1).max(10_000),
@@ -97,7 +206,7 @@ const ACTION_PARAM_KEYS: Record<string, readonly string[]> = {
     "targetSource",
   ],
   MOVE_MOUSE: ["x", "y", "targetLabel"],
-  SCROLL: ["direction", "amount", "x", "y"],
+  SCROLL: ["direction", "amount", "toEnd", "x", "y"],
   TYPE_TEXT: ["text"],
   KEY_PRESS: ["key"],
   HOTKEY: ["keys"],

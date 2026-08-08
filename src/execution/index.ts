@@ -8,6 +8,8 @@ export {
   shouldReplanOnNonExecutablePlan,
   looksLikeFakeUserApproval,
   toNeedsUserInputPlan,
+  instructionRequestsScreenshot,
+  shouldCompleteAfterScreenshotBatch,
 } from "./lifecycle.js";
 export type {
   TaskLifecycleStatus,

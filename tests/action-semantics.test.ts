@@ -10,6 +10,7 @@ import {
 } from "../src/intent/index.js";
 import { Orchestrator } from "../src/orchestrator/index.js";
 import { parseAction } from "../src/actions/index.js";
+import { ComputerActionSchema } from "../src/schemas/index.js";
 import type {
   AiCompletionRequest,
   AiCompletionResponse,
@@ -55,11 +56,11 @@ describe("action semantics — intent classification", () => {
     expect(intent.scrollDirection).toBe("down");
   });
 
-  it("Test B: scroll dm-s in Slack to bottom → SCROLL down", () => {
+  it("Test B: scroll dm-s in Slack to bottom → SCROLL down toEnd", () => {
     const intent = classifyUserIntent("scroll dm-s in slack to bottom");
     expect(intent.intent).toBe("SCROLL");
     expect(intent.scrollDirection).toBe("down");
-    expect(intent.scrollAmount).toBeGreaterThan(5);
+    expect(intent.scrollToEnd).toBe(true);
   });
 
   it('open Slack → OPEN_APP("Slack")', () => {
@@ -122,10 +123,11 @@ describe("action semantics — intent classification", () => {
     expect(intent.targetLabel?.toLowerCase()).toContain("dashboard");
   });
 
-  it("scroll Slack DMs to bottom → SCROLL", () => {
+  it("scroll Slack DMs to bottom → SCROLL toEnd", () => {
     const intent = classifyUserIntent("scroll Slack DMs to bottom");
     expect(intent.intent).toBe("SCROLL");
     expect(intent.scrollDirection).toBe("down");
+    expect(intent.scrollToEnd).toBe(true);
   });
 
   it("Test F: click refresh → CLICK", () => {
@@ -133,10 +135,11 @@ describe("action semantics — intent classification", () => {
     expect(intent.intent).toBe("CLICK");
   });
 
-  it("Test G: scroll to bottom → SCROLL not CLICK bottom", () => {
+  it("Test G: scroll to bottom → SCROLL toEnd not CLICK bottom", () => {
     const intent = classifyUserIntent("scroll to bottom");
     expect(intent.intent).toBe("SCROLL");
     expect(intent.scrollDirection).toBe("down");
+    expect(intent.scrollToEnd).toBe(true);
   });
 
   it("Open Chrome → OPEN_APP with Chrome", () => {
@@ -282,6 +285,13 @@ describe("action semantics — orchestrator end-to-end", () => {
       );
       if (result.response.actions[0]?.type === "SCROLL") {
         expect(result.response.actions[0].params.direction).toBe("down");
+        if (/bottom/i.test(instruction)) {
+          expect(result.response.actions[0].params.toEnd).toBe(true);
+        } else {
+          expect(typeof result.response.actions[0].params.amount).toBe(
+            "number",
+          );
+        }
       }
     }
   });
@@ -640,6 +650,7 @@ describe("SCROLL schema", () => {
     if (action.type === "SCROLL") {
       expect(action.params.direction).toBe("down");
       expect(action.params.amount).toBe(25);
+      expect(action.params.toEnd).toBe(false);
     }
   });
 
@@ -650,5 +661,61 @@ describe("SCROLL schema", () => {
       amount: 5,
     });
     expect(action.type).toBe("SCROLL");
+  });
+
+  it("coerces numeric string amount to number", () => {
+    const action = parseAction({
+      type: "SCROLL",
+      params: { direction: "down", amount: "5" },
+    });
+    expect(action.type).toBe("SCROLL");
+    if (action.type === "SCROLL") {
+      expect(action.params.amount).toBe(5);
+      expect(typeof action.params.amount).toBe("number");
+    }
+  });
+
+  it('maps amount "large" to a numeric notch count', () => {
+    const action = parseAction({
+      type: "SCROLL",
+      params: { direction: "down", amount: "large" },
+    });
+    expect(action.type).toBe("SCROLL");
+    if (action.type === "SCROLL") {
+      expect(typeof action.params.amount).toBe("number");
+      expect(action.params.amount).toBeGreaterThan(0);
+      expect(action.params.toEnd).toBe(false);
+    }
+  });
+
+  it('maps amount "bottom" to toEnd=true', () => {
+    const action = parseAction({
+      type: "SCROLL",
+      params: { direction: "down", amount: "bottom" },
+    });
+    expect(action.type).toBe("SCROLL");
+    if (action.type === "SCROLL") {
+      expect(action.params.toEnd).toBe(true);
+    }
+  });
+
+  it("accepts explicit toEnd for scroll to bottom", () => {
+    const action = parseAction({
+      type: "SCROLL",
+      params: { direction: "down", toEnd: true },
+    });
+    expect(action.type).toBe("SCROLL");
+    if (action.type === "SCROLL") {
+      expect(action.params.toEnd).toBe(true);
+    }
+  });
+
+  it('rejects unknown amount string "banana"', () => {
+    expect(
+      ComputerActionSchema.safeParse({
+        type: "SCROLL",
+        params: { direction: "down", amount: "banana" },
+      }).success,
+    ).toBe(false);
   });
 });

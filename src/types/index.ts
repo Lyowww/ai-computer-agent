@@ -104,8 +104,13 @@ export interface MoveMouseParams {
 
 export interface ScrollParams {
   direction: ScrollDirection;
-  /** Scroll notches / ticks (nut.js). Larger for “to bottom/top”. */
+  /** Scroll notches / ticks (nut.js). Used for ordinary scroll up/down. */
   amount?: number;
+  /**
+   * When true, scroll to the extreme end (top/bottom) for the given direction.
+   * Preferred over inventing a giant numeric amount for “to bottom/top”.
+   */
+  toEnd?: boolean;
   /** Optional focus point so the correct pane receives the scroll. */
   x?: number;
   y?: number;

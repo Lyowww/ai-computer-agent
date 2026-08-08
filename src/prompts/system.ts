@@ -17,7 +17,9 @@ export function buildSystemPrompt(intent?: ClassifiedIntent): string {
           "- Intent OPEN_APP → CLICK (NEVER)",
           "- Intent CLICK on ChatGPT → CLICK on a different tab (NEVER)",
           intent.intent === "SCROLL"
-            ? `For SCROLL use type SCROLL with direction=${intent.scrollDirection ?? "down"} and amount=${intent.scrollAmount ?? 5}. Do NOT click scrollbar thumbs unless the user explicitly asked to click.`
+            ? intent.scrollToEnd
+              ? `For SCROLL use type SCROLL with direction=${intent.scrollDirection ?? "down"} and toEnd=true. Do NOT use amount strings. Do NOT click scrollbar thumbs unless the user explicitly asked to click.`
+              : `For SCROLL use type SCROLL with direction=${intent.scrollDirection ?? "down"} and amount=${intent.scrollAmount ?? 5} (number only). Never return amount as a string. Do NOT click scrollbar thumbs unless the user explicitly asked to click.`
             : "",
           intent.intent === "OPEN_APP"
             ? `For OPEN_APP use type OPEN_APP with params.app (e.g. "${intent.targetLabel ?? "Slack"}"). Do NOT click the Dock as a substitute.`
@@ -52,7 +54,10 @@ export function buildSystemPrompt(intent?: ClassifiedIntent): string {
     "",
     "SCROLL rules:",
     "- User says scroll / scroll down / scroll to bottom → type SCROLL (never CLICK).",
-    '- Example: { "type": "SCROLL", "params": { "direction": "down", "amount": 25 } }',
+    "- SCROLL amount MUST be a number (wheel notches). Never return strings like \"small\", \"medium\", \"large\", \"a lot\", or \"far\".",
+    '- Ordinary scroll: { "type": "SCROLL", "params": { "direction": "down", "amount": 5 } }',
+    '- Scroll to bottom/top/end: { "type": "SCROLL", "params": { "direction": "down", "toEnd": true } }',
+    "- Prefer toEnd=true for “to bottom / to top / all the way” — do NOT invent a giant amount.",
     "- Optional x,y may focus the pane under the cursor; do not click.",
     "",
     "For every CLICK / DOUBLE_CLICK:",
@@ -92,6 +97,9 @@ export function buildSystemPrompt(intent?: ClassifiedIntent): string {
     "8. For a single simple request (e.g. click refresh, open Chrome, scroll down), return ONLY that semantic action.",
     "9. Only use WAIT or SCREENSHOT when a multi-step goal explicitly requires waiting for UI to settle before the next step.",
     "10. Do NOT retry failed clicks with guessed alternative coordinates — ask the user instead.",
+    "11. Multi-step goals (open… then scroll… then screenshot): execute ONE step per turn, then wait for a fresh screenshot and ACTION_RESULT before the next step.",
+    "12. Do NOT mark COMPLETED after only the first step (e.g. OPEN_APP) when more work remains.",
+    "13. When the user asked for a final screenshot, emit SCREENSHOT after prior steps succeed, then COMPLETED with DONE — never loop screenshots.",
     "",
     "Status rules (mandatory):",
     "- COMPLETED: instruction is done. No further actions except DONE. Never continue after COMPLETED.",
@@ -134,6 +142,10 @@ export function buildSystemPrompt(intent?: ClassifiedIntent): string {
     JSON.stringify({
       type: "SCROLL",
       params: { direction: "down", amount: 5 },
+    }),
+    JSON.stringify({
+      type: "SCROLL",
+      params: { direction: "down", toEnd: true },
     }),
     JSON.stringify({ type: "TYPE_TEXT", params: { text: "youtube.com" } }),
     JSON.stringify({ type: "KEY_PRESS", params: { key: "Enter" } }),
@@ -240,7 +252,9 @@ export function buildUserPrompt(args: {
       `=== CLASSIFIED INTENT: ${args.intent.intent} ===`,
       "Your returned action type MUST match this intent.",
       args.intent.intent === "SCROLL"
-        ? `Use SCROLL direction=${args.intent.scrollDirection ?? "down"} amount=${args.intent.scrollAmount ?? 5}.`
+        ? args.intent.scrollToEnd
+          ? `Use SCROLL direction=${args.intent.scrollDirection ?? "down"} toEnd=true (amount must be a number if present; prefer toEnd).`
+          : `Use SCROLL direction=${args.intent.scrollDirection ?? "down"} amount=${args.intent.scrollAmount ?? 5} (number only; never a string).`
         : "",
       args.intent.targetLabel
         ? `Requested target label hint: "${args.intent.targetLabel}".`

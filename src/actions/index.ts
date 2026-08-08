@@ -97,11 +97,12 @@ export function actionFingerprint(action: ComputerAction): string {
       return `${action.type}:${action.params.x}:${action.params.y}`;
     case "SCROLL": {
       const amount = action.params.amount ?? 5;
+      const end = action.params.toEnd ? ":toEnd" : `:${amount}`;
       const xy =
         action.params.x !== undefined && action.params.y !== undefined
           ? `:${action.params.x}:${action.params.y}`
           : "";
-      return `SCROLL:${action.params.direction}:${amount}${xy}`;
+      return `SCROLL:${action.params.direction}${end}${xy}`;
     }
     case "TYPE_TEXT":
       return `TYPE_TEXT:${hashTextFingerprint(action.params.text)}`;
