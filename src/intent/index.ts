@@ -1,9 +1,24 @@
-import type { ComputerAction, ScrollDirection, UserIntent } from "../types/index.js";
+import type {
+  ComputerAction,
+  ScrollDirection,
+  TaskIntent,
+  UserIntent,
+} from "../types/index.js";
 import { extractLikelyTargetLabel } from "../localization/spatial.js";
 import { inferExecutionMode } from "../execution/mode.js";
 
 export interface ClassifiedIntent {
+  /** Action-level intent — only locks types when locksActionType is true. */
   intent: UserIntent;
+  /** Task-level intent for the overall user goal. */
+  taskIntent: TaskIntent;
+  /** Short operational goal for prompts / logs. */
+  goal: string;
+  /**
+   * When true, each executable action must match allowedActionTypesForIntent(intent).
+   * Always false for multi-step / composite / messaging tasks.
+   */
+  locksActionType: boolean;
   /** Direction when intent is SCROLL. */
   scrollDirection?: ScrollDirection;
   /** Notch count for ordinary scroll (not used when scrollToEnd). */
@@ -321,107 +336,238 @@ export function validateOpenAppAction(
 
 /**
  * Classify the user’s instruction BEFORE vision planning.
- * The vision model must not change this fundamental action type.
- * Multi-step goals stay UNKNOWN so later steps are not locked to the first verb.
+ *
+ * Single-action requests may lock the ComputerAction type (locksActionType=true).
+ * Multi-step / messaging / composite goals use task-level intent and MUST NOT
+ * lock every step to a single action type (e.g. CLICK rejecting TYPE_TEXT).
  */
 export function classifyUserIntent(instruction: string): ClassifiedIntent {
   const text = instruction.trim();
   const isContinuation = isContinuationRequest(text);
 
   if (!text) {
-    return { intent: "UNKNOWN", isContinuation };
+    return {
+      intent: "UNKNOWN",
+      taskIntent: "UNKNOWN",
+      goal: "",
+      locksActionType: false,
+      isContinuation,
+    };
   }
 
-  // Multi-step goals: do not lock to the first verb (open…and then type…).
-  if (inferExecutionMode(text) === "multi_step") {
-    return { intent: "UNKNOWN", isContinuation };
+  const mode = inferExecutionMode(text);
+
+  // Multi-step goals: task-level intent only — never lock to the first verb.
+  if (mode === "multi_step") {
+    const taskIntent = classifyMultiStepTaskIntent(text);
+    return {
+      intent: "UNKNOWN",
+      taskIntent,
+      goal: summarizeTaskGoal(text, taskIntent),
+      locksActionType: false,
+      isContinuation,
+      targetLabel: extractLikelyTargetLabel(text),
+    };
   }
 
   // Order matters: more specific verbs first.
   if (/\bdouble[\s-]?click\b/i.test(text)) {
-    return {
-      intent: "DOUBLE_CLICK",
-      targetLabel: extractLikelyTargetLabel(text),
-      isContinuation,
-    };
+    return withTaskMeta(
+      {
+        intent: "DOUBLE_CLICK",
+        targetLabel: extractLikelyTargetLabel(text),
+        isContinuation,
+      },
+      text,
+    );
   }
 
   if (/\bscroll\b/i.test(text)) {
     const scrollDirection = detectScrollDirection(text);
     const scrollToEnd = instructionImpliesScrollToEnd(text);
-    return {
-      intent: "SCROLL",
-      scrollDirection,
-      scrollToEnd,
-      scrollAmount: scrollToEnd ? undefined : detectScrollAmount(text),
-      isContinuation,
-    };
+    return withTaskMeta(
+      {
+        intent: "SCROLL",
+        scrollDirection,
+        scrollToEnd,
+        scrollAmount: scrollToEnd ? undefined : detectScrollAmount(text),
+        isContinuation,
+      },
+      text,
+    );
   }
 
   // Browser “open new tab …” → NOT OPEN_APP. Leave UNKNOWN so vision may
   // choose CLICK or HOTKEY; never take the next word as an app name.
   if (/\b(open|launch)\s+(?:a\s+|the\s+)?new\s+tab\b/i.test(text)) {
-    return { intent: "UNKNOWN", isContinuation };
+    return withTaskMeta(
+      { intent: "UNKNOWN", isContinuation },
+      text,
+    );
   }
 
   // UI “open … tab/sidebar/menu/…” → CLICK (never OPEN_APP).
   // The word “open” alone is not OPEN_APP.
   if (instructionImpliesUiOpen(text)) {
-    return {
-      intent: "CLICK",
-      targetLabel: extractLikelyTargetLabel(text),
-      isContinuation,
-    };
+    return withTaskMeta(
+      {
+        intent: "CLICK",
+        targetLabel: extractLikelyTargetLabel(text),
+        isContinuation,
+      },
+      text,
+    );
   }
 
   // Desktop application launch — only when semantics clearly mean an app.
   if (/\b(open|launch|start)\b/i.test(text)) {
     const appName = extractOpenAppName(text);
     if (appName) {
-      return {
-        intent: "OPEN_APP",
-        targetLabel: appName,
-        isContinuation,
-      };
+      return withTaskMeta(
+        {
+          intent: "OPEN_APP",
+          targetLabel: appName,
+          isContinuation,
+        },
+        text,
+      );
     }
     // Ambiguous “open …” without a resolvable app name → let vision decide.
     // Do NOT take the next token after “open” as an app name.
   }
 
   if (/\b(type|enter|input|write)\b/i.test(text) && !/\bpress\b/i.test(text)) {
-    return { intent: "TYPE", isContinuation };
+    return withTaskMeta({ intent: "TYPE", isContinuation }, text);
   }
 
   if (/\b(hotkey|shortcut|press\s+(?:keys?|combo))\b/i.test(text)) {
-    return { intent: "HOTKEY", isContinuation };
+    return withTaskMeta({ intent: "HOTKEY", isContinuation }, text);
   }
 
   if (/\b(press|hit)\s+(?:the\s+)?(?:key\s+)?[A-Za-z]/i.test(text)) {
-    return { intent: "KEY_PRESS", isContinuation };
+    return withTaskMeta({ intent: "KEY_PRESS", isContinuation }, text);
   }
 
   if (/\b(wait|pause|sleep)\b/i.test(text)) {
-    return { intent: "WAIT", isContinuation };
+    return withTaskMeta({ intent: "WAIT", isContinuation }, text);
   }
 
   if (/\b(click|tap|select)\b/i.test(text)) {
-    return {
-      intent: "CLICK",
-      targetLabel: extractLikelyTargetLabel(text),
-      isContinuation,
-    };
+    return withTaskMeta(
+      {
+        intent: "CLICK",
+        targetLabel: extractLikelyTargetLabel(text),
+        isContinuation,
+      },
+      text,
+    );
   }
 
   // Bare “Devices tab” / refresh-style without explicit verb → treat as CLICK
   if (extractLikelyTargetLabel(text)) {
-    return {
-      intent: "CLICK",
-      targetLabel: extractLikelyTargetLabel(text),
-      isContinuation,
-    };
+    return withTaskMeta(
+      {
+        intent: "CLICK",
+        targetLabel: extractLikelyTargetLabel(text),
+        isContinuation,
+      },
+      text,
+    );
   }
 
-  return { intent: "UNKNOWN", isContinuation };
+  return withTaskMeta({ intent: "UNKNOWN", isContinuation }, text);
+}
+
+function withTaskMeta(
+  partial: Omit<
+    ClassifiedIntent,
+    "taskIntent" | "goal" | "locksActionType"
+  >,
+  text: string,
+): ClassifiedIntent {
+  const taskIntent = mapActionIntentToTaskIntent(partial.intent, text);
+  return {
+    ...partial,
+    taskIntent,
+    goal: summarizeTaskGoal(text, taskIntent),
+    locksActionType: partial.intent !== "UNKNOWN",
+  };
+}
+
+/**
+ * Task-level classification for multi-step instructions.
+ * Prefers SEND_MESSAGE when the goal is messaging; otherwise COMPOSITE_TASK.
+ */
+export function classifyMultiStepTaskIntent(instruction: string): TaskIntent {
+  const text = instruction.trim();
+  if (
+    /\b(send|message|dm|text|reply)\b/i.test(text) &&
+    (/\b(to|for)\b/i.test(text) || /["']/.test(text))
+  ) {
+    return "SEND_MESSAGE";
+  }
+  if (
+    /\b(screenshot|screen[\s-]?shot|capture\s+(the\s+)?screen)\b/i.test(text) &&
+    !/\b(open|launch|scroll|send|type|click)\b/i.test(text)
+  ) {
+    return "TAKE_SCREENSHOT";
+  }
+  return "COMPOSITE_TASK";
+}
+
+function mapActionIntentToTaskIntent(
+  intent: UserIntent,
+  text: string,
+): TaskIntent {
+  switch (intent) {
+    case "OPEN_APP":
+      return "OPEN_APP";
+    case "CLICK":
+    case "DOUBLE_CLICK":
+      return "CLICK_ELEMENT";
+    case "TYPE":
+      return "TYPE_TEXT";
+    case "SCROLL":
+      return "SCROLL";
+    case "UNKNOWN":
+      if (
+        /\b(screenshot|screen[\s-]?shot|give\s+me\s+(a\s+)?(?:screen[\s-]?shot|picture))\b/i.test(
+          text,
+        )
+      ) {
+        return "TAKE_SCREENSHOT";
+      }
+      return "UNKNOWN";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+/** Short operational goal string for prompts and logs. */
+export function summarizeTaskGoal(
+  instruction: string,
+  taskIntent?: TaskIntent,
+): string {
+  const text = instruction.trim().replace(/\s+/g, " ");
+  if (!text) return "";
+  const kind = taskIntent ?? classifyMultiStepTaskIntent(text);
+  if (kind === "SEND_MESSAGE") {
+    const quoted =
+      /["“](.+?)["”]/.exec(text)?.[1] ??
+      /'(.+?)'/.exec(text)?.[1] ??
+      null;
+    const recipient =
+      /\b(?:to|for)\s+([A-Z][\w .'-]{1,60}?)(?:\s+["'].*)?$/i.exec(text)?.[1] ??
+      /\b(?:to|for)\s+([A-Za-z][\w .'-]{1,60})/i.exec(text)?.[1] ??
+      null;
+    const msg = quoted ? `"${quoted}"` : "the requested message";
+    const who = recipient?.trim() || "the recipient";
+    return `Send ${msg} to ${who}.`;
+  }
+  if (kind === "SCROLL") {
+    return text.length > 160 ? `${text.slice(0, 157)}…` : text;
+  }
+  return text.length > 200 ? `${text.slice(0, 197)}…` : text;
 }
 
 /** Map classified intent → allowed ComputerAction types (plus meta actions). */
@@ -469,6 +615,10 @@ export function allowedActionTypesForIntent(
 /**
  * Validate structured actions against classified user intent.
  * reasoning_summary is NEVER consulted — only action.type / params.
+ *
+ * Multi-step / composite / messaging tasks (locksActionType=false) may mix
+ * OPEN_APP, CLICK, TYPE_TEXT, KEY_PRESS, etc. toward the same goal.
+ * Single-action intents still lock the fundamental action type.
  */
 export function validateActionAgainstIntent(
   instruction: string,
@@ -476,22 +626,24 @@ export function validateActionAgainstIntent(
   classified?: ClassifiedIntent,
 ): IntentValidationResult {
   const intentInfo = classified ?? classifyUserIntent(instruction);
-  const { intent } = intentInfo;
+  const { intent, locksActionType } = intentInfo;
 
-  if (intent === "UNKNOWN" || actions.length === 0) {
-    // Still reject invalid OPEN_APP even when intent is UNKNOWN
-    for (const action of actions) {
-      if (action.type === "OPEN_APP") {
-        const openCheck = validateOpenAppAction(action, instruction);
-        if (!openCheck.ok) {
-          return {
-            ok: false,
-            needsUserInput: true,
-            reason: openCheck.reason,
-          };
-        }
+  // Always validate OPEN_APP names — even for unlocked composite tasks.
+  for (const action of actions) {
+    if (action.type === "OPEN_APP") {
+      const openCheck = validateOpenAppAction(action, instruction);
+      if (!openCheck.ok) {
+        return {
+          ok: false,
+          needsUserInput: true,
+          reason: openCheck.reason,
+        };
       }
     }
+  }
+
+  // Task-level goals: allow any allowlisted computer action toward the goal.
+  if (!locksActionType || intent === "UNKNOWN") {
     return { ok: true, needsUserInput: false };
   }
 
@@ -514,24 +666,11 @@ export function validateActionAgainstIntent(
       };
     }
 
-    if (action.type === "OPEN_APP") {
-      const openCheck = validateOpenAppAction(action, instruction);
-      if (!openCheck.ok) {
-        return {
-          ok: false,
-          needsUserInput: true,
-          reason: openCheck.reason,
-        };
-      }
-    }
-
     if (action.type === "SCROLL" && intentInfo.scrollDirection) {
       if (action.params.direction !== intentInfo.scrollDirection) {
-        // Soft: allow opposite only if instruction was ambiguous; otherwise reject.
         const explicit =
           /\b(up|down|left|right|bottom|top|end|beginning)\b/i.test(instruction);
         if (explicit && action.params.direction !== intentInfo.scrollDirection) {
-          // “to bottom” → down; “to top” → up
           const expected = intentInfo.scrollDirection;
           if (action.params.direction !== expected) {
             return {
@@ -552,8 +691,6 @@ export function validateActionAgainstIntent(
         typeof action.params.targetLabel === "string"
           ? action.params.targetLabel.trim()
           : "";
-      // Missing targetLabel is enforced by the safety layer (after hard bounds checks).
-      // Here we only reject explicit substitutions.
       if (claimed && !labelsMatch(claimed, intentInfo.targetLabel)) {
         return {
           ok: false,

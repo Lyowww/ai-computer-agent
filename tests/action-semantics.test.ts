@@ -50,6 +50,17 @@ function orchestratorWith(plan: unknown): Orchestrator {
 }
 
 describe("action semantics — intent classification", () => {
+  it("open Slack send message → SEND_MESSAGE task, not CLICK lock", () => {
+    const instruction =
+      'now open slack send message to Lyov Hovhannisyan "hello"';
+    const intent = classifyUserIntent(instruction);
+    expect(intent.locksActionType).toBe(false);
+    expect(intent.intent).toBe("UNKNOWN");
+    expect(intent.taskIntent).toBe("SEND_MESSAGE");
+    expect(intent.goal.toLowerCase()).toContain("hello");
+    expect(intent.goal.toLowerCase()).toContain("lyov");
+  });
+
   it("Test A: scroll down → SCROLL intent, never CLICK", () => {
     const intent = classifyUserIntent("scroll down");
     expect(intent.intent).toBe("SCROLL");
@@ -196,6 +207,50 @@ describe("OPEN_APP validation layer", () => {
 });
 
 describe("action semantics — validateActionAgainstIntent", () => {
+  it("allows TYPE_TEXT for send-message composite tasks (no CLICK lock)", () => {
+    const instruction =
+      'open slack send message to Lyov Hovhannisyan "hello"';
+    const result = validateActionAgainstIntent(instruction, [
+      { type: "TYPE_TEXT", params: { text: "hello" } },
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.reason ?? "").not.toMatch(/User intent is CLICK/i);
+  });
+
+  it("allows OPEN_APP then CLICK then TYPE_TEXT sequence for messaging", () => {
+    const instruction =
+      'open Slack and send hello to Lyov Hovhannisyan';
+    expect(
+      validateActionAgainstIntent(instruction, [
+        { type: "OPEN_APP", params: { app: "Slack" } },
+      ]).ok,
+    ).toBe(true);
+    expect(
+      validateActionAgainstIntent(instruction, [
+        {
+          type: "CLICK",
+          params: {
+            x: 100,
+            y: 200,
+            button: "LEFT",
+            targetLabel: "Lyov Hovhannisyan",
+            targetConfidence: 0.9,
+          },
+        },
+      ]).ok,
+    ).toBe(true);
+    expect(
+      validateActionAgainstIntent(instruction, [
+        { type: "TYPE_TEXT", params: { text: "hello" } },
+      ]).ok,
+    ).toBe(true);
+    expect(
+      validateActionAgainstIntent(instruction, [
+        { type: "KEY_PRESS", params: { key: "Enter" } },
+      ]).ok,
+    ).toBe(true);
+  });
+
   it("rejects CLICK when user asked to scroll", () => {
     const result = validateActionAgainstIntent("scroll down", [
       { type: "CLICK", params: { x: 204, y: 809, button: "LEFT" } },

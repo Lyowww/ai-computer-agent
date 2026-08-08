@@ -3,12 +3,17 @@ import type {
   ComputerAction,
   ExecutionMode,
   Screenshot,
+  TaskIntent,
   TaskState,
   TaskStatus,
 } from "../types/index.js";
 import { actionFingerprint } from "../actions/index.js";
 import { createId, nowIso } from "../utils/index.js";
 import { inferExecutionMode } from "../execution/mode.js";
+import {
+  classifyUserIntent,
+  summarizeTaskGoal,
+} from "../intent/index.js";
 
 /** Cap retained history to avoid unbounded memory growth. */
 const MAX_PREVIOUS_ACTIONS = 50;
@@ -20,19 +25,25 @@ export interface CreateTaskOptions {
   userInstruction: string;
   screenshot?: Screenshot | null;
   executionMode?: ExecutionMode;
+  goal?: string;
+  taskIntent?: TaskIntent;
 }
 
 export function createTaskState(options: CreateTaskOptions): TaskState {
   const now = nowIso();
+  const classified = classifyUserIntent(options.userInstruction);
   return {
     taskId: options.taskId ?? createId("task"),
     userInstruction: options.userInstruction,
+    goal: options.goal ?? classified.goal ?? summarizeTaskGoal(options.userInstruction),
+    taskIntent: options.taskIntent ?? classified.taskIntent,
     currentScreenshot: options.screenshot
       ? stripScreenshotImage(options.screenshot)
       : null,
     previousActions: [],
     actionResults: [],
     iteration: 0,
+    stepIndex: 0,
     status: "pending",
     executionMode:
       options.executionMode ?? inferExecutionMode(options.userInstruction),
@@ -79,6 +90,7 @@ export function recordPlannedActions(
     ...state,
     previousActions,
     iteration: state.iteration + 1,
+    stepIndex: previousActions.length,
     status,
     updatedAt: nowIso(),
   };
@@ -186,11 +198,17 @@ export function summarizeHistoryForPrompt(state: TaskState): string {
   const lines: string[] = [];
   lines.push(`Task ID: ${state.taskId}`);
   lines.push(`CURRENT USER INSTRUCTION: ${state.userInstruction}`);
+  lines.push(`GOAL: ${state.goal || state.userInstruction}`);
+  lines.push(`Task intent: ${state.taskIntent}`);
+  lines.push(`Step index: ${state.stepIndex}`);
   lines.push(`Iteration: ${state.iteration}`);
   lines.push(`Status: ${state.status}`);
   lines.push(`Execution mode: ${state.executionMode}`);
   lines.push(
     "Isolation: This planning turn is ONLY for the instruction above. Do not reuse actions or coordinates from any other task.",
+  );
+  lines.push(
+    "Plan ONE next best action from the CURRENT screenshot. Do not invent a full coordinate sequence from an old screenshot.",
   );
 
   if (state.executionMode === "single_action") {
@@ -199,10 +217,12 @@ export function summarizeHistoryForPrompt(state: TaskState): string {
     );
   } else {
     lines.push(
-      "Mode hint: MULTI-STEP goal. Continue until EVERY part of the user instruction is done.",
+      "Mode hint: MULTI-STEP / COMPOSITE goal. Continue until EVERY part of the user GOAL is done.",
       "Do NOT return COMPLETED after only the first successful action (e.g. OPEN_APP alone).",
-      "After OPEN_APP/CLICK/SCROLL, wait for ACTION_RESULT + a fresh screenshot before the next step.",
+      "Different action types across steps are expected (OPEN_APP → CLICK → TYPE_TEXT → KEY_PRESS).",
+      "After each action, wait for ACTION_RESULT + a fresh screenshot before the next step.",
       "If the user asked for a screenshot at the end, emit SCREENSHOT once prior steps succeed, then COMPLETED with DONE — never screenshot in a loop.",
+      "Only return COMPLETED when the GOAL is verified from the current screenshot (e.g. message visible), not merely because an intermediate action succeeded.",
     );
   }
 
@@ -246,12 +266,16 @@ export function resetTaskExecutionState(
   userInstruction: string,
 ): TaskState {
   const now = nowIso();
+  const classified = classifyUserIntent(userInstruction);
   return {
     ...state,
     userInstruction,
+    goal: classified.goal,
+    taskIntent: classified.taskIntent,
     previousActions: [],
     actionResults: [],
     iteration: 0,
+    stepIndex: 0,
     status: "pending",
     executionMode: inferExecutionMode(userInstruction),
     error: null,

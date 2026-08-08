@@ -99,6 +99,8 @@ export {
   extractOpenAppName,
   instructionImpliesUiOpen,
   instructionImpliesScrollToEnd,
+  classifyMultiStepTaskIntent,
+  summarizeTaskGoal,
 } from "./intent/index.js";
 export type {
   ClassifiedIntent,
@@ -122,6 +124,7 @@ export type {
   ActionType,
   ExecutionMode,
   UserIntent,
+  TaskIntent,
   ScrollDirection,
 } from "./types/index.js";
 

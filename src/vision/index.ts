@@ -13,6 +13,12 @@ import {
 import type { ParsedAiPlanResponse } from "../schemas/index.js";
 import type { ClassifiedIntent } from "../intent/index.js";
 
+const JSON_REPAIR_PROMPT = [
+  "Your previous reply was not valid JSON for the required schema.",
+  "Return ONLY a single JSON object matching the response schema.",
+  "No markdown. No code fences. No explanation. No prose outside JSON.",
+].join(" ");
+
 function visionBoundaryLog(
   stage: string,
   extra?: Record<string, unknown>,
@@ -35,13 +41,54 @@ export interface VisionPlanRequest {
   maxIterations: number;
   userReply?: string;
   temperature?: number;
-  /** Pre-classified intent — locks action type in the prompt. */
+  /** Pre-classified intent — may lock action type for single-action tasks. */
   intent?: ClassifiedIntent;
+}
+
+function parseAndValidatePlan(content: string): ParsedAiPlanResponse {
+  let parsed: unknown;
+  try {
+    parsed = extractJsonObject(content);
+  } catch (err) {
+    throw new Error(
+      `Vision model returned non-JSON content: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  visionBoundaryLog("RAW_MODEL_RESPONSE", {
+    raw: parsed,
+  });
+
+  const normalized = normalizeRawPlan(parsed);
+  visionBoundaryLog("NORMALIZED_RESPONSE", {
+    normalized,
+  });
+
+  const validated = AiPlanResponseSchema.safeParse(normalized);
+  if (!validated.success) {
+    throw new Error(
+      `Vision model response failed schema validation: ${validated.error.message}`,
+    );
+  }
+
+  visionBoundaryLog("VALIDATED_RESPONSE", {
+    status: validated.data.status,
+    reasoning_summary: validated.data.reasoning_summary,
+    message: validated.data.message,
+    actions: validated.data.actions.map((a) => ({
+      type: a.type,
+      params: a.params,
+    })),
+  });
+
+  return validated.data;
 }
 
 /**
  * Call a vision-capable model with screenshot + task context and
  * parse a structured plan response.
+ *
+ * On malformed / non-JSON output: one bounded repair retry, then fail safely.
  */
 export async function planWithVision(
   request: VisionPlanRequest,
@@ -78,42 +125,33 @@ export async function planWithVision(
     responseFormat: "json_object",
   });
 
-  let parsed: unknown;
   try {
-    parsed = extractJsonObject(completion.content);
-  } catch (err) {
-    throw new Error(
-      `Vision model returned non-JSON content: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    return parseAndValidatePlan(completion.content);
+  } catch (firstErr) {
+    visionBoundaryLog("JSON_REPAIR_RETRY", {
+      reason: firstErr instanceof Error ? firstErr.message : String(firstErr),
+    });
+
+    const repairMessages: AiChatMessage[] = [
+      ...messages,
+      { role: "assistant", content: completion.content },
+      { role: "user", content: JSON_REPAIR_PROMPT },
+    ];
+
+    const repaired = await request.provider.complete({
+      model: request.model,
+      messages: repairMessages,
+      temperature: 0,
+      maxTokens: 2048,
+      responseFormat: "json_object",
+    });
+
+    try {
+      return parseAndValidatePlan(repaired.content);
+    } catch (secondErr) {
+      throw new Error(
+        `Vision model response invalid after repair retry: ${secondErr instanceof Error ? secondErr.message : String(secondErr)}`,
+      );
+    }
   }
-
-  visionBoundaryLog("RAW_MODEL_RESPONSE", {
-    raw: parsed,
-  });
-
-  // Normalize harmless optional human-readable fields BEFORE Zod.
-  // Never invents actions — genuinely invalid plans still fail validation.
-  const normalized = normalizeRawPlan(parsed);
-  visionBoundaryLog("NORMALIZED_RESPONSE", {
-    normalized,
-  });
-
-  const validated = AiPlanResponseSchema.safeParse(normalized);
-  if (!validated.success) {
-    throw new Error(
-      `Vision model response failed schema validation: ${validated.error.message}`,
-    );
-  }
-
-  visionBoundaryLog("VALIDATED_RESPONSE", {
-    status: validated.data.status,
-    reasoning_summary: validated.data.reasoning_summary,
-    message: validated.data.message,
-    actions: validated.data.actions.map((a) => ({
-      type: a.type,
-      params: a.params,
-    })),
-  });
-
-  return validated.data;
 }

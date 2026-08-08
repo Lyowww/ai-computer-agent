@@ -171,17 +171,27 @@ export class Orchestrator {
         screenshot,
         executionMode:
           input.executionMode ?? inferExecutionMode(userInstruction),
+        goal: intent.goal,
+        taskIntent: intent.taskIntent,
       });
 
     // If we rewrote a continuation onto a prior instruction, keep that as the task text.
     if (userInstruction !== state.userInstruction && !input.taskState) {
-      state = { ...state, userInstruction };
+      state = {
+        ...state,
+        userInstruction,
+        goal: intent.goal,
+        taskIntent: intent.taskIntent,
+      };
     }
 
     boundaryLog(state.taskId, "TASK", {
       instruction: userInstruction,
+      goal: state.goal,
+      taskIntent: state.taskIntent,
       executionMode: state.executionMode,
       iteration: state.iteration,
+      stepIndex: state.stepIndex,
     });
     boundaryLog(state.taskId, "USER_INSTRUCTION", {
       instruction: userInstruction,
@@ -189,6 +199,9 @@ export class Orchestrator {
     });
     boundaryLog(state.taskId, "INTENT", {
       intent: intent.intent,
+      taskIntent: intent.taskIntent,
+      goal: intent.goal,
+      locksActionType: intent.locksActionType,
       scrollDirection: intent.scrollDirection,
       scrollAmount: intent.scrollAmount,
       scrollToEnd: intent.scrollToEnd,
@@ -200,6 +213,9 @@ export class Orchestrator {
     // Back-compat alias for existing log consumers
     boundaryLog(state.taskId, "USER_INTENT", {
       intent: intent.intent,
+      taskIntent: intent.taskIntent,
+      goal: intent.goal,
+      locksActionType: intent.locksActionType,
       instruction: userInstruction,
       scrollDirection: intent.scrollDirection,
       scrollAmount: intent.scrollAmount,
@@ -214,6 +230,8 @@ export class Orchestrator {
       executionMode: state.executionMode,
       iteration: state.iteration,
       intent: intent.intent,
+      taskIntent: intent.taskIntent,
+      goal: state.goal,
     });
     taskLog(
       state.taskId,
@@ -313,7 +331,14 @@ export class Orchestrator {
     }
 
     const sameActions = countConsecutiveSameActions(state.previousActions);
-    if (sameActions.count >= sameActionLimit + 1) {
+    // Single-action: abort quickly on identical repeats.
+    // Multi-step: only treat long identical repeats as loops — mixed
+    // OPEN_APP → CLICK → TYPE_TEXT sequences are normal progression.
+    const identicalLoopLimit =
+      state.executionMode === "single_action"
+        ? sameActionLimit + 1
+        : Math.max(sameActionLimit + 3, 6);
+    if (sameActions.count >= identicalLoopLimit) {
       const response = failResponse(
         `Detected action loop (${sameActions.fingerprint}). Aborting to prevent infinite retries.`,
       );
@@ -592,6 +617,7 @@ export class Orchestrator {
       const safety = validateActionSafety(plan.actions, screenshot, {
         userInstruction,
         intent: intent.intent,
+        locksActionType: intent.locksActionType,
       });
 
       if (!safety.ok) {

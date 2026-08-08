@@ -9,11 +9,18 @@ const MULTI_STEP_CONNECTOR =
   /\b(and then|then|after that|afterwards|followed by|next|finally)\b/i;
 
 const ACTION_VERB =
-  /\b(open|launch|start|click|double[-\s]?click|type|press|hit|go to|navigate|visit|create|write|enter|select|scroll|drag|close|quit|delete|remove|move|copy|paste|search|download|upload|login|log in|sign in|refresh|reload|focus|switch|install|save|send|submit|fill|screenshot|capture)\b/gi;
+  /\b(open|launch|start|click|double[-\s]?click|type|press|hit|go to|navigate|visit|create|write|enter|select|scroll|drag|close|quit|delete|remove|move|copy|paste|search|download|upload|login|log in|sign in|refresh|reload|focus|switch|install|save|send|submit|fill|screenshot|capture|message|find|reply)\b/gi;
 
-/** Compact multi-goal phrases without an explicit “and then” connector. */
+/**
+ * Compact multi-goal phrases: open/launch an app (or UI) then another goal verb.
+ * Covers “open Slack send message…”, “open Chrome go to…”, etc.
+ */
 const COMPACT_MULTI_STEP =
-  /\b(open|launch|start)\b[\s\S]{0,80}\b(scroll|type|click|screenshot|capture|go to|navigate)\b/i;
+  /\b(open|launch|start)\b[\s\S]{0,120}\b(scroll|type|click|screenshot|capture|go to|navigate|send|message|search|find|write|dm|reply|fill)\b/i;
+
+/** Messaging / DM workflows are inherently multi-step (locate recipient → type → send). */
+const MESSAGING_WORKFLOW =
+  /\b(send|message|text|reply)\b[\s\S]{0,100}\b(?:to|for)\s+(?!the\s+)?(?!bottom\b|top\b|end\b|start\b|beginning\b)[A-Za-z]/i;
 
 const SCROLL_THEN_SCREENSHOT =
   /\bscroll\b[\s\S]{0,80}\b(screenshot|capture|give\s+me\s+(a\s+)?(?:screen[\s-]?shot|picture))\b/i;
@@ -30,7 +37,11 @@ export function inferExecutionMode(instruction: string): ExecutionMode {
     return "multi_step";
   }
 
-  if (COMPACT_MULTI_STEP.test(text) || SCROLL_THEN_SCREENSHOT.test(text)) {
+  if (
+    COMPACT_MULTI_STEP.test(text) ||
+    MESSAGING_WORKFLOW.test(text) ||
+    SCROLL_THEN_SCREENSHOT.test(text)
+  ) {
     return "multi_step";
   }
 

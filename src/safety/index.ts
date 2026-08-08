@@ -129,18 +129,25 @@ function labelsMatch(claimed: string, expected: string): boolean {
 export function validateActionSafety(
   actions: ComputerAction[],
   screenshot: Screenshot,
-  options?: { userInstruction?: string; intent?: UserIntent },
+  options?: {
+    userInstruction?: string;
+    intent?: UserIntent;
+    /** When false, do not enforce instruction targetLabel against clicks (composite tasks). */
+    locksActionType?: boolean;
+  },
 ): SafetyCheckResult {
   const violations: SafetyViolation[] = [];
   const safeActions: ComputerAction[] = [];
 
   const instruction = options?.userInstruction ?? "";
   const intent = options?.intent;
+  const locksActionType = options?.locksActionType ?? intent !== "UNKNOWN";
   const instructionNeedsConfirm =
     DESTRUCTIVE_TEXT_PATTERNS.some((re) => re.test(instruction));
-  const expectedLabel = instruction
-    ? extractLikelyTargetLabel(instruction)
-    : null;
+  const expectedLabel =
+    locksActionType && instruction
+      ? extractLikelyTargetLabel(instruction)
+      : null;
 
   for (let i = 0; i < actions.length; i++) {
     const action = actions[i];

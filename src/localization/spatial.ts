@@ -183,8 +183,17 @@ export function extractLikelyTargetLabel(instruction: string): string | null {
   const text = instruction.trim();
   if (!text) return null;
 
-  const quoted = /['"]([^'"]{1,64})['"]/.exec(text);
-  if (quoted?.[1]) return quoted[1].trim();
+  // Messaging goals: prefer the recipient, never the quoted message body as a click target.
+  if (/\b(send|message|dm|text|reply)\b/i.test(text)) {
+    const recipient =
+      /\b(?:to|for)\s+([A-Z][A-Za-z][\w'-]*(?:\s+[A-Z][A-Za-z][\w'-]*){0,3})\b/.exec(
+        text,
+      );
+    if (recipient?.[1]) return recipient[1].trim();
+  } else {
+    const quoted = /['"]([^'"]{1,64})['"]/.exec(text);
+    if (quoted?.[1]) return quoted[1].trim();
+  }
 
   const skip =
     /^(left|right|top|bottom|upper|lower|the|a|an|on|sidebar|nav|navigation|please|click|tap)$/i;

@@ -76,6 +76,14 @@ describe("execution mode inference", () => {
       ),
     ).toBe("multi_step");
   });
+
+  it("classifies open slack send message to recipient as multi_step", () => {
+    expect(
+      inferExecutionMode(
+        'now open slack send message to Lyov Hovhannisyan "hello"',
+      ),
+    ).toBe("multi_step");
+  });
 });
 
 describe("task lifecycle boundaries", () => {
@@ -483,6 +491,116 @@ describe("orchestrator single-shot behavior", () => {
         message: "x",
       }).success,
     ).toBe(false);
+  });
+
+  it("send-message task plans OPEN_APP → CLICK → TYPE_TEXT → KEY_PRESS without CLICK lock", async () => {
+    const provider = countingProvider([
+      {
+        status: "ACTION_REQUIRED",
+        reasoning_summary: "Opening Slack.",
+        actions: [{ type: "OPEN_APP", params: { app: "Slack" } }],
+        message: "Opening Slack.",
+      },
+      {
+        status: "ACTION_REQUIRED",
+        reasoning_summary: "Opening Lyov conversation.",
+        actions: [
+          {
+            type: "CLICK",
+            params: {
+              x: 220,
+              y: 310,
+              button: "LEFT",
+              targetLabel: "Lyov Hovhannisyan",
+              targetConfidence: 0.92,
+            },
+          },
+        ],
+        message: "Opening conversation.",
+      },
+      {
+        status: "ACTION_REQUIRED",
+        reasoning_summary: "Typing hello.",
+        actions: [{ type: "TYPE_TEXT", params: { text: "hello" } }],
+        message: "Typing.",
+      },
+      {
+        status: "ACTION_REQUIRED",
+        reasoning_summary: "Sending message.",
+        actions: [{ type: "KEY_PRESS", params: { key: "Enter" } }],
+        message: "Sending.",
+      },
+      {
+        status: "COMPLETED",
+        reasoning_summary: "Message sent and visible.",
+        actions: [
+          { type: "DONE", params: { summary: "Sent hello to Lyov Hovhannisyan" } },
+        ],
+        message: "Done.",
+      },
+    ]);
+
+    const orchestrator = new Orchestrator({
+      provider,
+      config: {
+        maxIterations: 30,
+        maxSameActionRetries: 3,
+        openRouterApiKey: "unused",
+      },
+    });
+
+    const instruction =
+      'now open slack send message to Lyov Hovhannisyan "hello"';
+
+    let { taskState, response, executionMode } =
+      await orchestrator.planNextAction({
+        userInstruction: instruction,
+        screenshot,
+      });
+
+    expect(executionMode).toBe("multi_step");
+    expect(taskState.taskIntent).toBe("SEND_MESSAGE");
+    expect(taskState.goal.toLowerCase()).toContain("hello");
+    expect(response.status).toBe("ACTION_REQUIRED");
+    expect(response.actions[0]?.type).toBe("OPEN_APP");
+    expect(response.message).not.toMatch(/User intent is CLICK/i);
+    expect(response.status).not.toBe("NEEDS_USER_INPUT");
+
+    const advance = async () => {
+      taskState = {
+        ...taskState,
+        previousActions: [...taskState.previousActions, ...response.actions],
+        actionResults: [
+          ...taskState.actionResults,
+          {
+            action: response.actions[0]!,
+            success: true,
+            executedAt: nowIso(),
+          },
+        ],
+        iteration: taskState.iteration + 1,
+      };
+      ({ taskState, response } = await orchestrator.planNextAction({
+        userInstruction: instruction,
+        screenshot,
+        taskState,
+      }));
+    };
+
+    await advance();
+    expect(response.actions[0]?.type).toBe("CLICK");
+    expect(response.message).not.toMatch(/User intent is CLICK/i);
+
+    await advance();
+    expect(response.actions[0]?.type).toBe("TYPE_TEXT");
+    expect(response.status).not.toBe("NEEDS_USER_INPUT");
+    expect(response.message).not.toMatch(/never substitute/i);
+
+    await advance();
+    expect(response.actions[0]?.type).toBe("KEY_PRESS");
+
+    await advance();
+    expect(response.status).toBe("COMPLETED");
   });
 
   it("Test 4: NEEDS_USER_INPUT does not invent approval clicks", async () => {

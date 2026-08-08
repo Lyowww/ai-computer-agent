@@ -4,32 +4,57 @@ import { formatCoordinateSystemPrompt } from "../localization/spatial.js";
 import type { ClassifiedIntent } from "../intent/index.js";
 
 export function buildSystemPrompt(intent?: ClassifiedIntent): string {
-  const intentLock =
-    intent && intent.intent !== "UNKNOWN"
+  const locks = Boolean(intent?.locksActionType && intent.intent !== "UNKNOWN");
+  const intentLock = locks
+    ? [
+        "",
+        "=== INTENT LOCK (mandatory) ===",
+        `The user's classified intent for this turn is: ${intent!.intent}.`,
+        "You MUST return actions whose type matches this intent.",
+        "You are FORBIDDEN from changing the fundamental action type.",
+        "Examples of forbidden substitutions:",
+        "- Intent SCROLL → CLICK (NEVER)",
+        "- Intent OPEN_APP → CLICK (NEVER)",
+        "- Intent CLICK on ChatGPT → CLICK on a different tab (NEVER)",
+        intent!.intent === "SCROLL"
+          ? intent!.scrollToEnd
+            ? `For SCROLL use type SCROLL with direction=${intent!.scrollDirection ?? "down"} and toEnd=true. Do NOT use amount strings. Do NOT click scrollbar thumbs unless the user explicitly asked to click.`
+            : `For SCROLL use type SCROLL with direction=${intent!.scrollDirection ?? "down"} and amount=${intent!.scrollAmount ?? 5} (number only). Never return amount as a string. Do NOT click scrollbar thumbs unless the user explicitly asked to click.`
+          : "",
+        intent!.intent === "OPEN_APP"
+          ? `For OPEN_APP use type OPEN_APP with params.app (e.g. "${intent!.targetLabel ?? "Slack"}"). Do NOT click the Dock as a substitute.`
+          : "",
+        intent!.intent === "CLICK" || intent!.intent === "DOUBLE_CLICK"
+          ? [
+              "For CLICK / DOUBLE_CLICK you MUST set:",
+              `- params.targetLabel to the exact visible label of the requested target${intent!.targetLabel ? ` (expected roughly: "${intent!.targetLabel}")` : ""}.`,
+              "- params.targetConfidence to a number 0..1 for how sure you are.",
+              "- If the exact target is not clearly visible, return NEEDS_USER_INPUT with ASK_USER — do NOT click a similar/nearby element.",
+            ].join("\n")
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : intent && !intent.locksActionType
       ? [
           "",
-          "=== INTENT LOCK (mandatory) ===",
-          `The user's classified intent for this turn is: ${intent.intent}.`,
-          "You MUST return actions whose type matches this intent.",
-          "You are FORBIDDEN from changing the fundamental action type.",
-          "Examples of forbidden substitutions:",
-          "- Intent SCROLL → CLICK (NEVER)",
-          "- Intent OPEN_APP → CLICK (NEVER)",
-          "- Intent CLICK on ChatGPT → CLICK on a different tab (NEVER)",
-          intent.intent === "SCROLL"
-            ? intent.scrollToEnd
-              ? `For SCROLL use type SCROLL with direction=${intent.scrollDirection ?? "down"} and toEnd=true. Do NOT use amount strings. Do NOT click scrollbar thumbs unless the user explicitly asked to click.`
-              : `For SCROLL use type SCROLL with direction=${intent.scrollDirection ?? "down"} and amount=${intent.scrollAmount ?? 5} (number only). Never return amount as a string. Do NOT click scrollbar thumbs unless the user explicitly asked to click.`
-            : "",
-          intent.intent === "OPEN_APP"
-            ? `For OPEN_APP use type OPEN_APP with params.app (e.g. "${intent.targetLabel ?? "Slack"}"). Do NOT click the Dock as a substitute.`
-            : "",
-          intent.intent === "CLICK" || intent.intent === "DOUBLE_CLICK"
+          "=== TASK-LEVEL GOAL (multi-step — no single-action lock) ===",
+          `Task intent: ${intent.taskIntent}.`,
+          `Goal: ${intent.goal || "(see user instruction)"}.`,
+          "This is a COMPOSITE computer task. Different action types across steps are EXPECTED.",
+          "Valid progression examples: OPEN_APP → CLICK → TYPE_TEXT → KEY_PRESS/HOTKEY → SCREENSHOT → DONE.",
+          "Each turn: emit ONLY the next best action for the CURRENT screenshot.",
+          "Do NOT reject TYPE_TEXT after CLICK — both can be steps of the same goal.",
+          "Do NOT mark COMPLETED until the goal is verified (e.g. message visible), not after OPEN_APP alone.",
+          intent.taskIntent === "SEND_MESSAGE"
             ? [
-                "For CLICK / DOUBLE_CLICK you MUST set:",
-                `- params.targetLabel to the exact visible label of the requested target${intent.targetLabel ? ` (expected roughly: "${intent.targetLabel}")` : ""}.`,
-                "- params.targetConfidence to a number 0..1 for how sure you are.",
-                "- If the exact target is not clearly visible, return NEEDS_USER_INPUT with ASK_USER — do NOT click a similar/nearby element.",
+                "SEND_MESSAGE operational checklist:",
+                "1. Is the app open? If not → OPEN_APP.",
+                "2. Is the recipient conversation visible? If yes → CLICK it. If not → search/navigate.",
+                "3. Is the message input focused? If not → CLICK the input.",
+                "4. TYPE_TEXT the message content.",
+                "5. Send (KEY_PRESS Enter or click Send).",
+                "6. Verify on a fresh screenshot, then DONE.",
               ].join("\n")
             : "",
         ]
@@ -43,10 +68,10 @@ export function buildSystemPrompt(intent?: ClassifiedIntent): string {
     "You ONLY return structured JSON computer actions for a separate desktop agent to execute.",
     "",
     "Priority order (mandatory):",
-    "1. INTENT MATCH — the action type must match the user's request (scroll≠click).",
-    "2. TARGET IDENTIFICATION — find the exact UI element the user asked for (when clicking).",
+    "1. GOAL PROGRESS — choose the next action that advances the user GOAL on the CURRENT screenshot.",
+    "2. TARGET IDENTIFICATION — find the exact UI element when clicking.",
     "3. COORDINATE ACCURACY — for pointer actions, return the center of that element.",
-    "4. ACTION EXECUTION — emit one decisive action for this request.",
+    "4. ONE STEP PER TURN — prefer one decisive action; wait for a fresh screenshot after UI changes.",
     "",
     "Never guess a target. Accuracy is more important than always producing a click.",
     "If the requested element is not clearly visible or is ambiguous, return status NEEDS_USER_INPUT",
@@ -247,7 +272,7 @@ export function buildUserPrompt(args: {
     "",
   ];
 
-  if (args.intent && args.intent.intent !== "UNKNOWN") {
+  if (args.intent && args.intent.locksActionType && args.intent.intent !== "UNKNOWN") {
     parts.push(
       `=== CLASSIFIED INTENT: ${args.intent.intent} ===`,
       "Your returned action type MUST match this intent.",
@@ -259,6 +284,14 @@ export function buildUserPrompt(args: {
       args.intent.targetLabel
         ? `Requested target label hint: "${args.intent.targetLabel}".`
         : "",
+      "",
+    );
+  } else if (args.intent && !args.intent.locksActionType) {
+    parts.push(
+      `=== TASK GOAL (${args.intent.taskIntent}) ===`,
+      args.intent.goal || args.historySummary,
+      "Return the NEXT best structured action for this goal. Mixed action types across steps are allowed.",
+      "Do not complete the task until the goal is satisfied.",
       "",
     );
   }

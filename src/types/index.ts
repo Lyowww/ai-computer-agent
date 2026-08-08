@@ -58,6 +58,21 @@ export type UserIntent =
   | "WAIT"
   | "UNKNOWN";
 
+/**
+ * Task-level intent for the overall user goal.
+ * Multi-step / messaging workflows use COMPOSITE_TASK or SEND_MESSAGE and must
+ * NOT lock every planner step to a single ComputerAction type.
+ */
+export type TaskIntent =
+  | "OPEN_APP"
+  | "CLICK_ELEMENT"
+  | "TYPE_TEXT"
+  | "SCROLL"
+  | "SEND_MESSAGE"
+  | "TAKE_SCREENSHOT"
+  | "COMPOSITE_TASK"
+  | "UNKNOWN";
+
 export interface Screenshot {
   /** Pixel width of the screenshot image. */
   width: number;
@@ -201,10 +216,16 @@ export interface ActionResult {
 export interface TaskState {
   taskId: string;
   userInstruction: string;
+  /** Short operational goal derived from the instruction. */
+  goal: string;
+  /** Task-level intent (not a single action lock). */
+  taskIntent: TaskIntent;
   currentScreenshot: Screenshot | null;
   previousActions: ComputerAction[];
   actionResults: ActionResult[];
   iteration: number;
+  /** Number of planning steps completed (previousActions batches). */
+  stepIndex: number;
   status: TaskStatus;
   executionMode: ExecutionMode;
   error: string | null;
