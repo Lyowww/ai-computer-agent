@@ -6,9 +6,25 @@ import type {
 } from "../types/index.js";
 import { toImageDataUrl, extractJsonObject } from "../utils/index.js";
 import { buildSystemPrompt, buildUserPrompt } from "../prompts/index.js";
-import { AiPlanResponseSchema } from "../schemas/index.js";
+import {
+  AiPlanResponseSchema,
+  normalizeRawPlan,
+} from "../schemas/index.js";
 import type { ParsedAiPlanResponse } from "../schemas/index.js";
 import type { ClassifiedIntent } from "../intent/index.js";
+
+function visionBoundaryLog(
+  stage: string,
+  extra?: Record<string, unknown>,
+): void {
+  console.log(
+    JSON.stringify({
+      level: "INFO",
+      stage,
+      ...extra,
+    }),
+  );
+}
 
 export interface VisionPlanRequest {
   provider: AiProvider;
@@ -71,12 +87,33 @@ export async function planWithVision(
     );
   }
 
-  const validated = AiPlanResponseSchema.safeParse(parsed);
+  visionBoundaryLog("RAW_MODEL_RESPONSE", {
+    raw: parsed,
+  });
+
+  // Normalize harmless optional human-readable fields BEFORE Zod.
+  // Never invents actions — genuinely invalid plans still fail validation.
+  const normalized = normalizeRawPlan(parsed);
+  visionBoundaryLog("NORMALIZED_RESPONSE", {
+    normalized,
+  });
+
+  const validated = AiPlanResponseSchema.safeParse(normalized);
   if (!validated.success) {
     throw new Error(
       `Vision model response failed schema validation: ${validated.error.message}`,
     );
   }
+
+  visionBoundaryLog("VALIDATED_RESPONSE", {
+    status: validated.data.status,
+    reasoning_summary: validated.data.reasoning_summary,
+    message: validated.data.message,
+    actions: validated.data.actions.map((a) => ({
+      type: a.type,
+      params: a.params,
+    })),
+  });
 
   return validated.data;
 }

@@ -142,14 +142,32 @@ export function normalizeRawAction(raw: unknown): unknown {
   return { type, params };
 }
 
+/**
+ * Normalize harmless omissions in model plan JSON before Zod validation.
+ *
+ * Defaults human-readable fields only (`message`, `reasoning_summary`).
+ * Never invents missing `actions` — ACTION_REQUIRED without actions still fails.
+ */
 export function normalizeRawPlan(raw: unknown): unknown {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   const obj = raw as Record<string, unknown>;
-  if (!Array.isArray(obj.actions)) return raw;
-  return {
-    ...obj,
-    actions: obj.actions.map(normalizeRawAction),
-  };
+
+  const out: Record<string, unknown> = { ...obj };
+
+  // Harmless omissions — human-readable explanation fields only
+  if (out.message === undefined || out.message === null) {
+    out.message = "";
+  }
+  if (out.reasoning_summary === undefined || out.reasoning_summary === null) {
+    out.reasoning_summary = "";
+  }
+
+  // Do NOT invent actions — only normalize shape when the field is present
+  if (Array.isArray(obj.actions)) {
+    out.actions = obj.actions.map(normalizeRawAction);
+  }
+
+  return out;
 }
 
 export const ComputerActionSchema = z.preprocess(
@@ -187,9 +205,11 @@ export const AiPlanResponseSchema = z.preprocess(
   normalizeRawPlan,
   z.object({
     status: AgentStatusSchema,
-    reasoning_summary: z.string().min(1).max(1000),
+    /** Operational note — structured actions are authoritative; empty allowed after normalize. */
+    reasoning_summary: z.string().max(1000).default(""),
     actions: z.array(ComputerActionSchema).max(10),
-    message: z.string().min(1).max(4000),
+    /** User-facing text — required as a string; omission is normalized to "". */
+    message: z.string().max(4000).default(""),
   }),
 );
 

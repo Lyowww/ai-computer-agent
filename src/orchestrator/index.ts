@@ -485,6 +485,7 @@ export class Orchestrator {
     boundaryLog(state.taskId, "RAW_AI_RESPONSE", {
       status: rawPlan.status,
       reasoning_summary: rawPlan.reasoning_summary,
+      message: rawPlan.message,
       actions: rawPlan.actions.map((a) => ({
         type: a.type,
         params: a.params,
@@ -493,6 +494,7 @@ export class Orchestrator {
     boundaryLog(state.taskId, "MODEL_RESPONSE", {
       status: rawPlan.status,
       reasoning_summary: rawPlan.reasoning_summary,
+      message: rawPlan.message,
       actions: rawPlan.actions.map((a) => ({
         type: a.type,
         params: a.params,
@@ -514,6 +516,13 @@ export class Orchestrator {
     }
 
     let plan: AiPlanResponse = planParse.data as AiPlanResponse;
+
+    boundaryLog(state.taskId, "VALIDATED_RESPONSE", {
+      status: plan.status,
+      reasoning_summary: plan.reasoning_summary,
+      message: plan.message,
+      actions: plan.actions.map((a) => ({ type: a.type, params: a.params })),
+    });
 
     boundaryLog(state.taskId, "NORMALIZED_ACTION", {
       actions: plan.actions.map((a) => ({ type: a.type, params: a.params })),

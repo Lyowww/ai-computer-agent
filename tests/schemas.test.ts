@@ -4,6 +4,7 @@ import {
   AiPlanResponseSchema,
   ScreenshotSchema,
   normalizeRawAction,
+  normalizeRawPlan,
 } from "../src/schemas/index.js";
 import {
   parseAction,
@@ -12,6 +13,21 @@ import {
   isSupportedActionType,
   hashTextFingerprint,
 } from "../src/actions/index.js";
+import { validateActionSafety } from "../src/safety/index.js";
+import { planWithVision } from "../src/vision/index.js";
+import type {
+  AiCompletionRequest,
+  AiCompletionResponse,
+  AiProvider,
+  Screenshot,
+} from "../src/types/index.js";
+import { Orchestrator } from "../src/orchestrator/index.js";
+
+const screenshot: Screenshot = {
+  width: 1280,
+  height: 800,
+  image: "not-a-real-png-payload-for-tests",
+};
 
 describe("action schemas", () => {
   it("parses CLICK actions", () => {
@@ -159,5 +175,204 @@ describe("action schemas", () => {
   it("normalizeRawAction leaves unknown types alone", () => {
     const raw = { type: "RUN_SHELL", command: "ls" };
     expect(normalizeRawAction(raw)).toEqual(raw);
+  });
+
+  it("accepts ACTION_REQUIRED plans that omit message (defaults to empty string)", () => {
+    const plan = AiPlanResponseSchema.parse({
+      status: "ACTION_REQUIRED",
+      reasoning_summary: "Open a new browser tab.",
+      actions: [
+        {
+          type: "HOTKEY",
+          params: {
+            keys: ["META", "T"],
+          },
+        },
+      ],
+    });
+    expect(plan.message).toBe("");
+    expect(plan.actions).toHaveLength(1);
+    expect(plan.actions[0]?.type).toBe("HOTKEY");
+  });
+
+  it("accepts plans that omit reasoning_summary (defaults to empty string)", () => {
+    const plan = AiPlanResponseSchema.parse({
+      status: "ACTION_REQUIRED",
+      actions: [
+        {
+          type: "HOTKEY",
+          params: { keys: ["META", "T"] },
+        },
+      ],
+      message: "Opening a new tab.",
+    });
+    expect(plan.reasoning_summary).toBe("");
+  });
+
+  it("normalizeRawPlan defaults message/reasoning_summary but does not invent actions", () => {
+    const withActions = normalizeRawPlan({
+      status: "ACTION_REQUIRED",
+      actions: [{ type: "CLICK", x: 500, y: 100 }],
+    }) as Record<string, unknown>;
+    expect(withActions.message).toBe("");
+    expect(withActions.reasoning_summary).toBe("");
+    expect(withActions.actions).toEqual([
+      { type: "CLICK", params: { x: 500, y: 100 } },
+    ]);
+
+    const withoutActions = normalizeRawPlan({
+      status: "ACTION_REQUIRED",
+    }) as Record<string, unknown>;
+    expect(withoutActions.message).toBe("");
+    expect(withoutActions.reasoning_summary).toBe("");
+    expect(withoutActions.actions).toBeUndefined();
+  });
+
+  it("rejects ACTION_REQUIRED with no actions field", () => {
+    const result = AiPlanResponseSchema.safeParse({
+      status: "ACTION_REQUIRED",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown action types in a plan", () => {
+    const result = AiPlanResponseSchema.safeParse({
+      status: "ACTION_REQUIRED",
+      actions: [{ type: "INVALID_ACTION" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("still rejects out-of-bounds negative click coordinates via safety", () => {
+    const plan = AiPlanResponseSchema.parse({
+      status: "ACTION_REQUIRED",
+      reasoning_summary: "bad click",
+      actions: [
+        {
+          type: "CLICK",
+          params: { x: -500, y: 100 },
+        },
+      ],
+      message: "click",
+    });
+    const safety = validateActionSafety(plan.actions, screenshot);
+    expect(safety.ok).toBe(false);
+    expect(
+      safety.violations.some((v) => v.code === "COORDINATE_OUT_OF_BOUNDS"),
+    ).toBe(true);
+  });
+});
+
+describe("vision plan schema resilience", () => {
+  it("planWithVision accepts model JSON missing message", async () => {
+    const provider: AiProvider = {
+      name: "mock",
+      async complete(
+        _req: AiCompletionRequest,
+      ): Promise<AiCompletionResponse> {
+        return {
+          content: JSON.stringify({
+            status: "ACTION_REQUIRED",
+            reasoning_summary: "Open a new browser tab.",
+            actions: [
+              {
+                type: "HOTKEY",
+                params: {
+                  keys: ["META", "T"],
+                },
+              },
+            ],
+          }),
+          model: "mock-model",
+        };
+      },
+    };
+
+    const plan = await planWithVision({
+      provider,
+      model: "mock",
+      screenshot,
+      historySummary: "User instruction: open new tab on google",
+      iteration: 1,
+      maxIterations: 10,
+    });
+
+    expect(plan.message).toBe("");
+    expect(plan.status).toBe("ACTION_REQUIRED");
+    expect(plan.actions[0]?.type).toBe("HOTKEY");
+  });
+
+  it("full pipeline: open new tab on google with HOTKEY and no message", async () => {
+    const orch = new Orchestrator({
+      provider: {
+        name: "mock",
+        async complete(): Promise<AiCompletionResponse> {
+          return {
+            content: JSON.stringify({
+              status: "ACTION_REQUIRED",
+              reasoning_summary: "Open a new browser tab.",
+              actions: [
+                {
+                  type: "HOTKEY",
+                  params: { keys: ["META", "T"] },
+                },
+              ],
+            }),
+            model: "mock-model",
+          };
+        },
+      },
+      config: {
+        provider: "openrouter",
+        model: "mock",
+        maxIterations: 10,
+        maxSameActionRetries: 3,
+        openRouterApiKey: "unused",
+      },
+    });
+
+    const result = await orch.planNextAction({
+      userInstruction: "open new tab on google",
+      screenshot,
+    });
+
+    expect(result.response.status).toBe("ACTION_REQUIRED");
+    expect(result.response.message).toBe("");
+    expect(result.response.actions).toHaveLength(1);
+    expect(result.response.actions[0]?.type).toBe("HOTKEY");
+    expect(result.response.actions.every((a) => a.type !== "OPEN_APP")).toBe(
+      true,
+    );
+  });
+
+  it("full pipeline still fails schema when actions are missing", async () => {
+    const orch = new Orchestrator({
+      provider: {
+        name: "mock",
+        async complete(): Promise<AiCompletionResponse> {
+          return {
+            content: JSON.stringify({
+              status: "ACTION_REQUIRED",
+            }),
+            model: "mock-model",
+          };
+        },
+      },
+      config: {
+        provider: "openrouter",
+        model: "mock",
+        maxIterations: 10,
+        maxSameActionRetries: 3,
+        openRouterApiKey: "unused",
+      },
+    });
+
+    const result = await orch.planNextAction({
+      userInstruction: "open new tab on google",
+      screenshot,
+    });
+
+    expect(result.response.status).toBe("FAILED");
+    expect(result.response.message).toMatch(/schema validation/i);
   });
 });
