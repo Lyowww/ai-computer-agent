@@ -1,5 +1,9 @@
 import type { ComputerAction, Screenshot } from "../types/index.js";
 import { isCoordinateInBounds } from "../utils/index.js";
+import {
+  checkSpatialSanity,
+  extractLikelyTargetLabel,
+} from "../localization/spatial.js";
 
 export interface SafetyViolation {
   code: string;
@@ -67,7 +71,14 @@ const LOCK_SCREEN_APP_HINTS: RegExp[] = [
 ];
 
 function normalizeKey(key: string): string {
-  return key.trim().toLowerCase().replace(/^control$/, "ctrl").replace(/^cmd$/, "meta").replace(/^command$/, "meta").replace(/^option$/, "alt").replace(/^return$/, "enter");
+  return key
+    .trim()
+    .toLowerCase()
+    .replace(/^control$/, "ctrl")
+    .replace(/^cmd$/, "meta")
+    .replace(/^command$/, "meta")
+    .replace(/^option$/, "alt")
+    .replace(/^return$/, "enter");
 }
 
 function isDangerousHotkey(keys: string[]): boolean {
@@ -83,7 +94,7 @@ function isDangerousHotkey(keys: string[]): boolean {
 
 function hasCoordinateParams(
   params: object,
-): params is { x: number; y: number } {
+): params is { x: number; y: number; targetLabel?: string } {
   return (
     "x" in params &&
     "y" in params &&
@@ -108,12 +119,15 @@ export function validateActionSafety(
   const instruction = options?.userInstruction ?? "";
   const instructionNeedsConfirm =
     DESTRUCTIVE_TEXT_PATTERNS.some((re) => re.test(instruction));
+  const expectedLabel = instruction
+    ? extractLikelyTargetLabel(instruction)
+    : null;
 
   for (let i = 0; i < actions.length; i++) {
     const action = actions[i];
     let blocked = false;
 
-    // Coordinate bounds
+    // Coordinate bounds + spatial sanity
     if (
       (action.type === "CLICK" ||
         action.type === "DOUBLE_CLICK" ||
@@ -129,6 +143,45 @@ export function validateActionSafety(
           requiresConfirmation: false,
         });
         blocked = true;
+      } else if (instruction) {
+        const spatial = checkSpatialSanity(
+          x,
+          y,
+          screenshot.width,
+          screenshot.height,
+          instruction,
+        );
+        if (!spatial.ok) {
+          violations.push({
+            code: "SPATIAL_CONSTRAINT_VIOLATION",
+            message:
+              spatial.reason ??
+              `Click (${x}, ${y}) contradicts spatial language in the instruction`,
+            actionIndex: i,
+            // Ask user rather than guessing a different click.
+            requiresConfirmation: true,
+          });
+          blocked = true;
+        }
+
+        // Soft label mismatch: model claimed a different target than the instruction.
+        const claimed =
+          typeof action.params.targetLabel === "string"
+            ? action.params.targetLabel.trim()
+            : "";
+        if (
+          expectedLabel &&
+          claimed &&
+          claimed.toLowerCase() !== expectedLabel.toLowerCase()
+        ) {
+          violations.push({
+            code: "TARGET_LABEL_MISMATCH",
+            message: `targetLabel "${claimed}" does not match requested "${expectedLabel}"`,
+            actionIndex: i,
+            requiresConfirmation: true,
+          });
+          blocked = true;
+        }
       }
     }
 
@@ -194,14 +247,6 @@ export function validateActionSafety(
       }
     }
 
-    // KEY_PRESS that looks like force-quit / secure attention
-    if (action.type === "KEY_PRESS") {
-      const key = normalizeKey(action.params.key);
-      if (key === "f4" || key === "delete" || key === "power") {
-        // Not automatically blocked alone, but flagged with instruction context below
-      }
-    }
-
     // Instruction-level consequential ops: force ASK_USER before continuing
     if (
       instructionNeedsConfirm &&
@@ -252,6 +297,11 @@ export function validateActionSafety(
 
   let askUserAction: ComputerAction | undefined;
   if (needsConfirm && safeActions.length === 0) {
+    const spatialOrTarget = violations.some(
+      (v) =>
+        v.code === "SPATIAL_CONSTRAINT_VIOLATION" ||
+        v.code === "TARGET_LABEL_MISMATCH",
+    );
     const reasons = violations
       .filter((v) => v.requiresConfirmation)
       .map((v) => v.message)
@@ -259,8 +309,9 @@ export function validateActionSafety(
     askUserAction = {
       type: "ASK_USER",
       params: {
-        question:
-          "This task may perform a consequential or sensitive operation. Do you want to proceed?",
+        question: spatialOrTarget
+          ? "I can't confidently identify the requested button in the current screen. Can you point me to it or clarify?"
+          : "This task may perform a consequential or sensitive operation. Do you want to proceed?",
         reason: reasons,
       },
     };

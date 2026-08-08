@@ -185,26 +185,33 @@ function summarizeAction(action: ComputerAction): string {
 export function summarizeHistoryForPrompt(state: TaskState): string {
   const lines: string[] = [];
   lines.push(`Task ID: ${state.taskId}`);
+  lines.push(`CURRENT USER INSTRUCTION: ${state.userInstruction}`);
   lines.push(`Iteration: ${state.iteration}`);
   lines.push(`Status: ${state.status}`);
   lines.push(`Execution mode: ${state.executionMode}`);
-  lines.push(`User instruction: ${state.userInstruction}`);
+  lines.push(
+    "Isolation: This planning turn is ONLY for the instruction above. Do not reuse actions or coordinates from any other task.",
+  );
+
   if (state.executionMode === "single_action") {
     lines.push(
-      "Mode hint: This is a single-action request. Plan only what is needed for this instruction; do not invent follow-up work.",
+      "Mode hint: This is a single-action request. Plan only what is needed for this instruction; do not invent follow-up work or verification loops.",
     );
   }
 
+  // Same-task history only — never conversation messages from other tasks.
   if (state.previousActions.length > 0) {
-    lines.push("Previous actions:");
+    lines.push("Actions already taken for THIS task only:");
     const recent = state.previousActions.slice(-12);
     for (const action of recent) {
       lines.push(`- ${summarizeAction(action)}`);
     }
+  } else {
+    lines.push("Actions already taken for THIS task: none (fresh task).");
   }
 
   if (state.actionResults.length > 0) {
-    lines.push("Recent action results:");
+    lines.push("Action results for THIS task only:");
     const recent = state.actionResults.slice(-12);
     for (const result of recent) {
       lines.push(
@@ -221,4 +228,27 @@ export function summarizeHistoryForPrompt(state: TaskState): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Reset ephemeral planning state when a brand-new user command starts a task.
+ * Conversation history stays elsewhere; this clears execution counters only.
+ */
+export function resetTaskExecutionState(
+  state: TaskState,
+  userInstruction: string,
+): TaskState {
+  const now = nowIso();
+  return {
+    ...state,
+    userInstruction,
+    previousActions: [],
+    actionResults: [],
+    iteration: 0,
+    status: "pending",
+    executionMode: inferExecutionMode(userInstruction),
+    error: null,
+    updatedAt: now,
+    notes: [],
+  };
 }

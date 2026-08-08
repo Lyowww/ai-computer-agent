@@ -30,6 +30,21 @@ import {
   toNeedsUserInputPlan,
 } from "../execution/lifecycle.js";
 import { nowIso } from "../utils/index.js";
+import {
+  withAlignedDimensions,
+  formatAiCoordinateLog,
+} from "../localization/index.js";
+
+function taskLog(taskId: string, message: string, extra?: Record<string, unknown>): void {
+  console.log(
+    JSON.stringify({
+      level: "INFO",
+      taskId,
+      message,
+      ...extra,
+    }),
+  );
+}
 
 export interface OrchestratorOptions {
   config?: Partial<OrchestratorConfig>;
@@ -72,7 +87,22 @@ export class Orchestrator {
         `Invalid screenshot: ${screenshotParse.error.message}`,
       );
     }
-    const screenshot = screenshotParse.data;
+
+    const aligned = withAlignedDimensions(screenshotParse.data);
+    const screenshot = aligned.screenshot;
+    if (aligned.check.warning) {
+      console.warn(
+        JSON.stringify({
+          level: "WARN",
+          message: aligned.check.warning,
+          metadata: {
+            width: aligned.check.metadataWidth,
+            height: aligned.check.metadataHeight,
+          },
+          image: { width: aligned.check.width, height: aligned.check.height },
+        }),
+      );
+    }
 
     let state: TaskState =
       input.taskState ??
@@ -83,6 +113,19 @@ export class Orchestrator {
         executionMode:
           input.executionMode ?? inferExecutionMode(input.userInstruction),
       });
+
+    taskLog(state.taskId, `User: ${state.userInstruction}`, {
+      executionMode: state.executionMode,
+      iteration: state.iteration,
+    });
+    taskLog(
+      state.taskId,
+      `Screenshot: ${screenshot.width}x${screenshot.height}`,
+      {
+        corrected: aligned.check.corrected,
+        measured: aligned.check.measured,
+      },
+    );
 
     // Hard boundary: never plan for terminal tasks
     if (
@@ -125,6 +168,12 @@ export class Orchestrator {
     state = updateScreenshot(state, screenshot);
     state = setTaskStatus(state, "running");
 
+    // Single-action tasks: never burn retries inventing alternate clicks
+    const sameActionLimit =
+      state.executionMode === "single_action"
+        ? 1
+        : this.config.maxSameActionRetries;
+
     // --- Loop protection: max iterations ---
     if (state.iteration >= this.config.maxIterations) {
       const response = failResponse(
@@ -140,23 +189,23 @@ export class Orchestrator {
 
     // --- Loop protection: repeated failed / identical actions ---
     const failedRepeats = countConsecutiveFailedRepeats(state.actionResults);
-    if (failedRepeats.count >= this.config.maxSameActionRetries) {
+    if (failedRepeats.count >= sameActionLimit) {
       const response: AiPlanResponse = {
         status: "NEEDS_USER_INPUT",
         reasoning_summary:
-          "Same action failed repeatedly; need user guidance.",
+          "Same action failed; need user guidance rather than guessing again.",
         actions: [
           {
             type: "ASK_USER",
             params: {
               question:
-                "I keep failing the same action. How should I proceed?",
-              reason: `Repeated unsuccessful action: ${failedRepeats.fingerprint}`,
+                "I can't confidently identify the requested target. How should I proceed?",
+              reason: `Unsuccessful action: ${failedRepeats.fingerprint}`,
             },
           },
         ],
         message:
-          "Stuck repeating an unsuccessful action. Please provide guidance.",
+          "I can't confidently identify the requested button in the current screen.",
       };
       state = recordPlannedActions(state, response.actions, "needs_user_input");
       return {
@@ -167,7 +216,7 @@ export class Orchestrator {
     }
 
     const sameActions = countConsecutiveSameActions(state.previousActions);
-    if (sameActions.count >= this.config.maxSameActionRetries + 1) {
+    if (sameActions.count >= sameActionLimit + 1) {
       const response = failResponse(
         `Detected action loop (${sameActions.fingerprint}). Aborting to prevent infinite retries.`,
       );
@@ -219,7 +268,7 @@ export class Orchestrator {
 
     let plan: AiPlanResponse = planParse.data as AiPlanResponse;
 
-    // --- Safety layer ---
+    // --- Safety layer (bounds + spatial sanity + target label) ---
     const safety = validateActionSafety(plan.actions, screenshot, {
       userInstruction: state.userInstruction,
     });
@@ -243,7 +292,9 @@ export class Orchestrator {
         plan = {
           status: "NEEDS_USER_INPUT",
           reasoning_summary:
-            "Action blocked by safety policy; user confirmation required.",
+            safety.violations.some((v) => v.code === "SPATIAL_CONSTRAINT_VIOLATION")
+              ? "Proposed click contradicts the spatial language in the user instruction."
+              : "Action blocked by safety policy; user confirmation required.",
           actions: [ask],
           message:
             ask.type === "ASK_USER"
@@ -275,10 +326,12 @@ export class Orchestrator {
     plan = normalizePlanStatus(plan);
 
     // Soft loop check — identical successful-looking repeats near the limit
+    // For single_action: any proposed repeat of the same click → ask user (no retry spam)
+    const softRepeatThreshold = state.executionMode === "single_action" ? 1 : 2;
     if (
       plan.actions.length > 0 &&
       sameActions.fingerprint &&
-      sameActions.count >= 2
+      sameActions.count >= softRepeatThreshold
     ) {
       const proposedSame = plan.actions.every(
         (a) => actionFingerprint(a) === sameActions.fingerprint,
@@ -292,15 +345,46 @@ export class Orchestrator {
               type: "ASK_USER",
               params: {
                 question:
-                  "I am about to repeat the same action. Should I continue or try a different approach?",
+                  "I can't confidently identify the requested button in the current screen. Should I try a different approach?",
                 reason: `Potential loop: ${sameActions.fingerprint}`,
               },
             },
           ],
-          message: "Potential action loop detected. Awaiting user input.",
+          message:
+            "I can't confidently identify the requested button in the current screen.",
         };
       }
     }
+
+    for (const action of plan.actions) {
+      if (
+        (action.type === "CLICK" ||
+          action.type === "DOUBLE_CLICK" ||
+          action.type === "MOVE_MOUSE") &&
+        "x" in action.params &&
+        "y" in action.params
+      ) {
+        const label =
+          "targetLabel" in action.params &&
+          typeof action.params.targetLabel === "string"
+            ? action.params.targetLabel
+            : undefined;
+        console.log(
+          formatAiCoordinateLog({
+            taskId: state.taskId,
+            x: action.params.x,
+            y: action.params.y,
+            imageWidth: screenshot.width,
+            imageHeight: screenshot.height,
+            targetLabel: label,
+          }),
+        );
+      }
+    }
+
+    taskLog(state.taskId, `AI status: ${plan.status}`, {
+      actions: plan.actions.map((a) => a.type),
+    });
 
     const taskStatus =
       plan.status === "COMPLETED"

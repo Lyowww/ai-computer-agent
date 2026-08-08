@@ -5,21 +5,27 @@ const MouseButtonSchema = z.preprocess((value) => {
   return value;
 }, z.enum(["LEFT", "RIGHT", "MIDDLE"]));
 
+/** Optional UI label for validation/debug — never treated as proof of correct coords. */
+const TargetLabelSchema = z.string().min(1).max(128).optional();
+
 export const ClickParamsSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   button: MouseButtonSchema.optional().default("LEFT"),
+  targetLabel: TargetLabelSchema,
 });
 
 export const DoubleClickParamsSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   button: MouseButtonSchema.optional().default("LEFT"),
+  targetLabel: TargetLabelSchema,
 });
 
 export const MoveMouseParamsSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
+  targetLabel: TargetLabelSchema,
 });
 
 export const TypeTextParamsSchema = z.object({
@@ -56,9 +62,9 @@ export const AskUserParamsSchema = z.object({
 });
 
 const ACTION_PARAM_KEYS: Record<string, readonly string[]> = {
-  CLICK: ["x", "y", "button"],
-  DOUBLE_CLICK: ["x", "y", "button"],
-  MOVE_MOUSE: ["x", "y"],
+  CLICK: ["x", "y", "button", "targetLabel"],
+  DOUBLE_CLICK: ["x", "y", "button", "targetLabel"],
+  MOVE_MOUSE: ["x", "y", "targetLabel"],
   TYPE_TEXT: ["text"],
   KEY_PRESS: ["key"],
   HOTKEY: ["keys"],

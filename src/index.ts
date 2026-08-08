@@ -45,7 +45,22 @@ export {
   recordActionResults,
   summarizeHistoryForPrompt,
   stripScreenshotImage,
+  resetTaskExecutionState,
 } from "./memory/index.js";
+
+export {
+  extractSpatialConstraints,
+  checkSpatialSanity,
+  extractLikelyTargetLabel,
+  alignScreenshotDimensions,
+  withAlignedDimensions,
+  formatAiCoordinateLog,
+} from "./localization/index.js";
+export type {
+  SpatialRegion,
+  SpatialSanityResult,
+  ScreenshotDimensionCheck,
+} from "./localization/index.js";
 
 export {
   inferExecutionMode,

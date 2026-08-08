@@ -70,15 +70,32 @@ describe("orchestrator.planNextAction", () => {
   });
 
   it("continues with taskState after recordActionResults", async () => {
-    const orchestrator = new Orchestrator({
-      provider: mockProvider({
+    const plans = [
+      {
         status: "ACTION_REQUIRED",
         reasoning_summary: "Address bar ready.",
-        actions: [
-          { type: "TYPE_TEXT", params: { text: "youtube.com" } },
-        ],
+        actions: [{ type: "TYPE_TEXT", params: { text: "youtube.com" } }],
         message: "Typing URL.",
-      }),
+      },
+      {
+        status: "ACTION_REQUIRED",
+        reasoning_summary: "URL typed; press Enter.",
+        actions: [{ type: "KEY_PRESS", params: { key: "Enter" } }],
+        message: "Submitting URL.",
+      },
+    ];
+    let call = 0;
+    const provider: AiProvider = {
+      name: "mock",
+      async complete() {
+        const plan = plans[Math.min(call, plans.length - 1)];
+        call += 1;
+        return { content: JSON.stringify(plan), model: "mock" };
+      },
+    };
+
+    const orchestrator = new Orchestrator({
+      provider,
       config: {
         maxIterations: 30,
         maxSameActionRetries: 3,
@@ -86,10 +103,14 @@ describe("orchestrator.planNextAction", () => {
       },
     });
 
+    // Multi-step so a second plan is allowed after a successful first action
     let { taskState, response } = await orchestrator.planNextAction({
-      userInstruction: "Open youtube.com",
+      userInstruction: "Open Chrome and go to youtube.com",
       screenshot,
+      executionMode: "multi_step",
     });
+
+    expect(response.actions[0]?.type).toBe("TYPE_TEXT");
 
     taskState = recordActionResults(taskState, [
       {
@@ -106,6 +127,7 @@ describe("orchestrator.planNextAction", () => {
     }));
 
     expect(response.status).toBe("ACTION_REQUIRED");
+    expect(response.actions[0]?.type).toBe("KEY_PRESS");
     expect(taskState.iteration).toBe(2);
     expect(taskState.actionResults).toHaveLength(1);
   });

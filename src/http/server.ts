@@ -142,6 +142,18 @@ export function createPlanServer(): http.Server {
         const executionMode =
           body.executionMode ?? inferExecutionMode(body.userInstruction);
 
+        const taskId = body.taskId ?? "unknown";
+        console.log(
+          JSON.stringify({
+            level: "INFO",
+            taskId,
+            message: `User: ${body.userInstruction}`,
+            screenshot: `${body.screenshot.width}x${body.screenshot.height}`,
+            iteration: body.iteration ?? 0,
+            executionMode,
+          }),
+        );
+
         const { response, executionMode: mode } = await planNextAction({
           taskId: body.taskId,
           userInstruction: body.userInstruction,
@@ -166,8 +178,18 @@ export function createPlanServer(): http.Server {
           userReply: body.userReply,
         });
 
+        console.log(
+          JSON.stringify({
+            level: "INFO",
+            taskId,
+            message: `AI status: ${response.status}`,
+            actions: response.actions.map((a) => a.type),
+            executionMode: mode,
+          }),
+        );
+
         send(res, 200, {
-          taskId: body.taskId ?? "unknown",
+          taskId,
           status: AGENT_TO_WIRE[response.status] ?? "continue",
           message: response.message,
           actions: toWireActions(response.actions),

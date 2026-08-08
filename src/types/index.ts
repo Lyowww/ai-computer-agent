@@ -61,17 +61,21 @@ export interface ClickParams {
   x: number;
   y: number;
   button?: MouseButton;
+  /** Debug/validation only — not proof the coordinate is correct. */
+  targetLabel?: string;
 }
 
 export interface DoubleClickParams {
   x: number;
   y: number;
   button?: MouseButton;
+  targetLabel?: string;
 }
 
 export interface MoveMouseParams {
   x: number;
   y: number;
+  targetLabel?: string;
 }
 
 export interface TypeTextParams {
