@@ -37,6 +37,9 @@ const SHELL_INJECTION_PATTERNS: RegExp[] = [
 const BLOCKED_APPS: RegExp[] = [
   /terminal/i,
   /iterm/i,
+  /warp/i,
+  /kitty/i,
+  /alacritty/i,
   /powershell/i,
   /cmd\.exe/i,
   /command\s*prompt/i,
@@ -44,6 +47,10 @@ const BLOCKED_APPS: RegExp[] = [
   /registry\s*editor/i,
   /regedit/i,
   /disk\s*utility/i,
+  /keychain\s*access/i,
+  /activity\s*monitor/i,
+  /system\s*settings/i,
+  /system\s*preferences/i,
 ];
 
 /** Hotkeys that can be destructive or security-sensitive. */
@@ -388,4 +395,5 @@ export const SAFETY_ASK_USER_CATEGORIES = [
   "installing unknown software",
   "disabling security software",
   "bypassing OS authentication or lock screen",
+  "opening sensitive system/admin applications",
 ] as const;
