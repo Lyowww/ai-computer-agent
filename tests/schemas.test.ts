@@ -36,13 +36,19 @@ describe("action schemas", () => {
     });
   });
 
-  it("parses TYPE_TEXT and OPEN_APP", () => {
+  it("parses TYPE_TEXT, OPEN_APP, and SCROLL", () => {
     expect(
       parseAction({ type: "TYPE_TEXT", params: { text: "Hello world" } }).type,
     ).toBe("TYPE_TEXT");
     expect(
       parseAction({ type: "OPEN_APP", params: { app: "Google Chrome" } }).type,
     ).toBe("OPEN_APP");
+    expect(
+      parseAction({
+        type: "SCROLL",
+        params: { direction: "down", amount: 5 },
+      }).type,
+    ).toBe("SCROLL");
   });
 
   it("rejects unknown action types", () => {

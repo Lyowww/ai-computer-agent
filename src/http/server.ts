@@ -130,6 +130,7 @@ export function createPlanServer(): http.Server {
           iteration?: number;
           executionMode?: ExecutionMode;
           userReply?: string;
+          previousTaskInstruction?: string | null;
         };
 
         if (!body.userInstruction || !body.screenshot) {
@@ -151,6 +152,7 @@ export function createPlanServer(): http.Server {
             screenshot: `${body.screenshot.width}x${body.screenshot.height}`,
             iteration: body.iteration ?? 0,
             executionMode,
+            previousTaskInstruction: body.previousTaskInstruction ?? null,
           }),
         );
 
@@ -176,6 +178,7 @@ export function createPlanServer(): http.Server {
           iteration: body.iteration,
           executionMode,
           userReply: body.userReply,
+          previousTaskInstruction: body.previousTaskInstruction,
         });
 
         console.log(

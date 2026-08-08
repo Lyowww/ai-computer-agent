@@ -37,11 +37,26 @@ export type ActionType =
   | "TYPE_TEXT"
   | "KEY_PRESS"
   | "HOTKEY"
+  | "SCROLL"
   | "OPEN_APP"
   | "WAIT"
   | "SCREENSHOT"
   | "DONE"
   | "ASK_USER";
+
+export type ScrollDirection = "up" | "down" | "left" | "right";
+
+/** Classified user intent — locks the fundamental action type before vision planning. */
+export type UserIntent =
+  | "CLICK"
+  | "DOUBLE_CLICK"
+  | "SCROLL"
+  | "TYPE"
+  | "KEY_PRESS"
+  | "HOTKEY"
+  | "OPEN_APP"
+  | "WAIT"
+  | "UNKNOWN";
 
 export interface Screenshot {
   /** Pixel width of the screenshot image. */
@@ -61,8 +76,15 @@ export interface ClickParams {
   x: number;
   y: number;
   button?: MouseButton;
-  /** Debug/validation only — not proof the coordinate is correct. */
+  /**
+   * What the model believes it is clicking (visible label / description).
+   * Required for confident CLICK plans — never substitute a nearby element.
+   */
   targetLabel?: string;
+  /** 0–1 confidence that targetLabel is the requested target. */
+  targetConfidence?: number;
+  /** How the target was identified (e.g. visible text, icon). */
+  targetSource?: string;
 }
 
 export interface DoubleClickParams {
@@ -70,12 +92,23 @@ export interface DoubleClickParams {
   y: number;
   button?: MouseButton;
   targetLabel?: string;
+  targetConfidence?: number;
+  targetSource?: string;
 }
 
 export interface MoveMouseParams {
   x: number;
   y: number;
   targetLabel?: string;
+}
+
+export interface ScrollParams {
+  direction: ScrollDirection;
+  /** Scroll notches / ticks (nut.js). Larger for “to bottom/top”. */
+  amount?: number;
+  /** Optional focus point so the correct pane receives the scroll. */
+  x?: number;
+  y?: number;
 }
 
 export interface TypeTextParams {
@@ -118,6 +151,7 @@ export type ActionParams =
   | ClickParams
   | DoubleClickParams
   | MoveMouseParams
+  | ScrollParams
   | TypeTextParams
   | KeyPressParams
   | HotkeyParams
@@ -131,6 +165,7 @@ export type ComputerAction =
   | { type: "CLICK"; params: ClickParams }
   | { type: "DOUBLE_CLICK"; params: DoubleClickParams }
   | { type: "MOVE_MOUSE"; params: MoveMouseParams }
+  | { type: "SCROLL"; params: ScrollParams }
   | { type: "TYPE_TEXT"; params: TypeTextParams }
   | { type: "KEY_PRESS"; params: KeyPressParams }
   | { type: "HOTKEY"; params: HotkeyParams }
@@ -188,6 +223,11 @@ export interface PlanNextActionInput {
   userReply?: string;
   /** Existing task state to continue; if omitted a new task is created. */
   taskState?: TaskState;
+  /**
+   * Immediately previous completed/failed task instruction.
+   * Used only when the current message is a continuation ("again" / "retry that").
+   */
+  previousTaskInstruction?: string | null;
 }
 
 export interface PlanNextActionResult {

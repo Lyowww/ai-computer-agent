@@ -84,6 +84,15 @@ export {
 } from "./utils/index.js";
 export { planWithVision } from "./vision/index.js";
 
+export {
+  classifyUserIntent,
+  isContinuationRequest,
+  resolveContinuationInstruction,
+  validateActionAgainstIntent,
+  allowedActionTypesForIntent,
+} from "./intent/index.js";
+export type { ClassifiedIntent, IntentValidationResult } from "./intent/index.js";
+
 export type {
   Screenshot,
   ComputerAction,
@@ -99,6 +108,8 @@ export type {
   TaskStatus,
   ActionType,
   ExecutionMode,
+  UserIntent,
+  ScrollDirection,
 } from "./types/index.js";
 
 /**

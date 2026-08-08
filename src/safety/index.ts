@@ -1,5 +1,6 @@
-import type { ComputerAction, Screenshot } from "../types/index.js";
+import type { ComputerAction, Screenshot, UserIntent } from "../types/index.js";
 import { isCoordinateInBounds } from "../utils/index.js";
+import { requiresCoordinates } from "../actions/index.js";
 import {
   checkSpatialSanity,
   extractLikelyTargetLabel,
@@ -70,6 +71,8 @@ const LOCK_SCREEN_APP_HINTS: RegExp[] = [
   /keychain\s*access/i,
 ];
 
+const MIN_TARGET_CONFIDENCE = 0.75;
+
 function normalizeKey(key: string): string {
   return key
     .trim()
@@ -94,13 +97,21 @@ function isDangerousHotkey(keys: string[]): boolean {
 
 function hasCoordinateParams(
   params: object,
-): params is { x: number; y: number; targetLabel?: string } {
+): params is { x: number; y: number; targetLabel?: string; targetConfidence?: number } {
   return (
     "x" in params &&
     "y" in params &&
     typeof (params as { x: unknown }).x === "number" &&
     typeof (params as { y: unknown }).y === "number"
   );
+}
+
+function labelsMatch(claimed: string, expected: string): boolean {
+  const a = claimed.trim().toLowerCase();
+  const b = expected.trim().toLowerCase();
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  return false;
 }
 
 /**
@@ -111,12 +122,13 @@ function hasCoordinateParams(
 export function validateActionSafety(
   actions: ComputerAction[],
   screenshot: Screenshot,
-  options?: { userInstruction?: string },
+  options?: { userInstruction?: string; intent?: UserIntent },
 ): SafetyCheckResult {
   const violations: SafetyViolation[] = [];
   const safeActions: ComputerAction[] = [];
 
   const instruction = options?.userInstruction ?? "";
+  const intent = options?.intent;
   const instructionNeedsConfirm =
     DESTRUCTIVE_TEXT_PATTERNS.some((re) => re.test(instruction));
   const expectedLabel = instruction
@@ -127,13 +139,8 @@ export function validateActionSafety(
     const action = actions[i];
     let blocked = false;
 
-    // Coordinate bounds + spatial sanity
-    if (
-      (action.type === "CLICK" ||
-        action.type === "DOUBLE_CLICK" ||
-        action.type === "MOVE_MOUSE") &&
-      hasCoordinateParams(action.params)
-    ) {
+    // Coordinate bounds + spatial sanity — only for pointer actions
+    if (requiresCoordinates(action.type) && hasCoordinateParams(action.params)) {
       const { x, y } = action.params;
       if (!isCoordinateInBounds(x, y, screenshot.width, screenshot.height)) {
         violations.push({
@@ -143,7 +150,7 @@ export function validateActionSafety(
           requiresConfirmation: false,
         });
         blocked = true;
-      } else if (instruction) {
+      } else if (instruction && intent !== "SCROLL") {
         const spatial = checkSpatialSanity(
           x,
           y,
@@ -158,34 +165,73 @@ export function validateActionSafety(
               spatial.reason ??
               `Click (${x}, ${y}) contradicts spatial language in the instruction`,
             actionIndex: i,
-            // Ask user rather than guessing a different click.
             requiresConfirmation: true,
           });
           blocked = true;
         }
 
-        // Soft label mismatch: model claimed a different target than the instruction.
         const claimed =
           typeof action.params.targetLabel === "string"
             ? action.params.targetLabel.trim()
             : "";
+
         if (
           expectedLabel &&
-          claimed &&
-          claimed.toLowerCase() !== expectedLabel.toLowerCase()
+          (action.type === "CLICK" || action.type === "DOUBLE_CLICK")
         ) {
-          violations.push({
-            code: "TARGET_LABEL_MISMATCH",
-            message: `targetLabel "${claimed}" does not match requested "${expectedLabel}"`,
-            actionIndex: i,
-            requiresConfirmation: true,
-          });
-          blocked = true;
+          if (!claimed) {
+            violations.push({
+              code: "TARGET_IDENTITY_MISSING",
+              message: `CLICK missing targetLabel for requested "${expectedLabel}" — refusing to guess`,
+              actionIndex: i,
+              requiresConfirmation: true,
+            });
+            blocked = true;
+          } else if (!labelsMatch(claimed, expectedLabel)) {
+            violations.push({
+              code: "TARGET_LABEL_MISMATCH",
+              message: `targetLabel "${claimed}" does not match requested "${expectedLabel}" — never substitute a different element`,
+              actionIndex: i,
+              requiresConfirmation: true,
+            });
+            blocked = true;
+          }
+
+          const confidence = action.params.targetConfidence;
+          if (
+            typeof confidence === "number" &&
+            confidence < MIN_TARGET_CONFIDENCE
+          ) {
+            violations.push({
+              code: "TARGET_CONFIDENCE_LOW",
+              message: `targetConfidence ${confidence} below ${MIN_TARGET_CONFIDENCE} for "${claimed}"`,
+              actionIndex: i,
+              requiresConfirmation: true,
+            });
+            blocked = true;
+          }
         }
       }
     }
 
-    // TYPE_TEXT injection / script attempts
+    if (action.type === "SCROLL") {
+      const { x, y } = action.params;
+      if (
+        (x !== undefined || y !== undefined) &&
+        (typeof x !== "number" ||
+          typeof y !== "number" ||
+          !isCoordinateInBounds(x, y, screenshot.width, screenshot.height))
+      ) {
+        violations.push({
+          code: "SCROLL_FOCUS_OUT_OF_BOUNDS",
+          message: `SCROLL focus point outside screenshot ${screenshot.width}x${screenshot.height}`,
+          actionIndex: i,
+          requiresConfirmation: false,
+        });
+        blocked = true;
+      }
+    }
+
     if (action.type === "TYPE_TEXT") {
       const text = action.params.text;
       if (SHELL_INJECTION_PATTERNS.some((re) => re.test(text))) {
@@ -210,7 +256,6 @@ export function validateActionSafety(
       }
     }
 
-    // OPEN_APP restrictions
     if (action.type === "OPEN_APP") {
       const app = action.params.app;
       if (BLOCKED_APPS.some((re) => re.test(app))) {
@@ -233,7 +278,6 @@ export function validateActionSafety(
       }
     }
 
-    // Dangerous hotkeys
     if (action.type === "HOTKEY") {
       const keys = action.params.keys;
       if (isDangerousHotkey(keys)) {
@@ -247,7 +291,6 @@ export function validateActionSafety(
       }
     }
 
-    // Instruction-level consequential ops: force ASK_USER before continuing
     if (
       instructionNeedsConfirm &&
       action.type !== "ASK_USER" &&
@@ -265,7 +308,6 @@ export function validateActionSafety(
       blocked = true;
     }
 
-    // Disallow inventing executable payloads as params
     const forbiddenKeys = [
       "code",
       "script",
@@ -300,7 +342,9 @@ export function validateActionSafety(
     const spatialOrTarget = violations.some(
       (v) =>
         v.code === "SPATIAL_CONSTRAINT_VIOLATION" ||
-        v.code === "TARGET_LABEL_MISMATCH",
+        v.code === "TARGET_LABEL_MISMATCH" ||
+        v.code === "TARGET_IDENTITY_MISSING" ||
+        v.code === "TARGET_CONFIDENCE_LOW",
     );
     const reasons = violations
       .filter((v) => v.requiresConfirmation)

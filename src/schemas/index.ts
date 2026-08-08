@@ -7,12 +7,16 @@ const MouseButtonSchema = z.preprocess((value) => {
 
 /** Optional UI label for validation/debug — never treated as proof of correct coords. */
 const TargetLabelSchema = z.string().min(1).max(128).optional();
+const TargetConfidenceSchema = z.number().min(0).max(1).optional();
+const TargetSourceSchema = z.string().min(1).max(64).optional();
 
 export const ClickParamsSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   button: MouseButtonSchema.optional().default("LEFT"),
   targetLabel: TargetLabelSchema,
+  targetConfidence: TargetConfidenceSchema,
+  targetSource: TargetSourceSchema,
 });
 
 export const DoubleClickParamsSchema = z.object({
@@ -20,12 +24,26 @@ export const DoubleClickParamsSchema = z.object({
   y: z.number().finite(),
   button: MouseButtonSchema.optional().default("LEFT"),
   targetLabel: TargetLabelSchema,
+  targetConfidence: TargetConfidenceSchema,
+  targetSource: TargetSourceSchema,
 });
 
 export const MoveMouseParamsSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   targetLabel: TargetLabelSchema,
+});
+
+export const ScrollDirectionSchema = z.preprocess((value) => {
+  if (typeof value === "string") return value.trim().toLowerCase();
+  return value;
+}, z.enum(["up", "down", "left", "right"]));
+
+export const ScrollParamsSchema = z.object({
+  direction: ScrollDirectionSchema.default("down"),
+  amount: z.number().finite().positive().max(100).optional().default(5),
+  x: z.number().finite().optional(),
+  y: z.number().finite().optional(),
 });
 
 export const TypeTextParamsSchema = z.object({
@@ -62,9 +80,24 @@ export const AskUserParamsSchema = z.object({
 });
 
 const ACTION_PARAM_KEYS: Record<string, readonly string[]> = {
-  CLICK: ["x", "y", "button", "targetLabel"],
-  DOUBLE_CLICK: ["x", "y", "button", "targetLabel"],
+  CLICK: [
+    "x",
+    "y",
+    "button",
+    "targetLabel",
+    "targetConfidence",
+    "targetSource",
+  ],
+  DOUBLE_CLICK: [
+    "x",
+    "y",
+    "button",
+    "targetLabel",
+    "targetConfidence",
+    "targetSource",
+  ],
   MOVE_MOUSE: ["x", "y", "targetLabel"],
+  SCROLL: ["direction", "amount", "x", "y"],
   TYPE_TEXT: ["text"],
   KEY_PRESS: ["key"],
   HOTKEY: ["keys"],
@@ -128,6 +161,7 @@ export const ComputerActionSchema = z.preprocess(
       params: DoubleClickParamsSchema,
     }),
     z.object({ type: z.literal("MOVE_MOUSE"), params: MoveMouseParamsSchema }),
+    z.object({ type: z.literal("SCROLL"), params: ScrollParamsSchema }),
     z.object({ type: z.literal("TYPE_TEXT"), params: TypeTextParamsSchema }),
     z.object({ type: z.literal("KEY_PRESS"), params: KeyPressParamsSchema }),
     z.object({ type: z.literal("HOTKEY"), params: HotkeyParamsSchema }),

@@ -148,7 +148,7 @@ describe("orchestrator.planNextAction", () => {
     });
 
     const result = await orchestrator.planNextAction({
-      userInstruction: "Open youtube.com",
+      userInstruction: "Confirm the page is open",
       screenshot,
     });
 
@@ -308,7 +308,7 @@ describe("orchestrator.planNextAction", () => {
     });
 
     const result = await orchestrator.planNextAction({
-      userInstruction: "open chrome",
+      userInstruction: "click the mysterious widget",
       screenshot,
     });
 
@@ -327,7 +327,7 @@ describe("orchestrator.planNextAction", () => {
     });
 
     const result = await orchestrator.planNextAction({
-      userInstruction: "open chrome",
+      userInstruction: "click the mysterious widget",
       screenshot,
     });
 

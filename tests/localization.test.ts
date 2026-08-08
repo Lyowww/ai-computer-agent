@@ -108,7 +108,13 @@ describe("Case A: left top sidebar Devices", () => {
         actions: [
           {
             type: "CLICK",
-            params: { x: 105, y: 152, button: "LEFT", targetLabel: "Devices" },
+            params: {
+              x: 105,
+              y: 152,
+              button: "LEFT",
+              targetLabel: "Devices",
+              targetConfidence: 0.92,
+            },
           },
         ],
       },
@@ -183,7 +189,13 @@ describe("Case B/C: Processes vs refresh target labels", () => {
         actions: [
           {
             type: "CLICK",
-            params: { x: 110, y: 420, button: "LEFT", targetLabel: "Processes" },
+            params: {
+              x: 110,
+              y: 420,
+              button: "LEFT",
+              targetLabel: "Processes",
+              targetConfidence: 0.9,
+            },
           },
         ],
       },

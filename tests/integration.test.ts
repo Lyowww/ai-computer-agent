@@ -41,6 +41,8 @@ describe("integration: fake AiProvider pipeline", () => {
                 x: 500,
                 y: 300,
                 button: "left",
+                targetLabel: "submit",
+                targetConfidence: 0.9,
               },
             ],
             message: "Clicking the button.",
@@ -70,7 +72,13 @@ describe("integration: fake AiProvider pipeline", () => {
     expect(response.actions).toEqual([
       {
         type: "CLICK",
-        params: { x: 500, y: 300, button: "LEFT" },
+        params: {
+          x: 500,
+          y: 300,
+          button: "LEFT",
+          targetLabel: "submit",
+          targetConfidence: 0.9,
+        },
       },
     ]);
     expect(response.message).toBe("Clicking the button.");

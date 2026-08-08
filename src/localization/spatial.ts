@@ -39,10 +39,16 @@ const COMPOUND: Array<{ re: RegExp; region: SpatialRegion }> = [
 /**
  * Parse spatial words from a user instruction into regions that a click must respect.
  * "left top sidebar" → top-left. Plain "click Devices" → no constraint.
+ * Scroll destinations ("scroll to bottom") are NOT click spatial constraints.
  */
 export function extractSpatialConstraints(instruction: string): SpatialRegion[] {
   const text = instruction.trim();
   if (!text) return [];
+
+  // Scroll instructions describe scroll destination, not click region.
+  if (/\bscroll\b/i.test(text)) {
+    return [];
+  }
 
   const regions: SpatialRegion[] = [];
   const seen = new Set<SpatialRegion>();

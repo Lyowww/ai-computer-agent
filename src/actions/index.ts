@@ -4,6 +4,7 @@ import {
   ClickParamsSchema,
   DoubleClickParamsSchema,
   MoveMouseParamsSchema,
+  ScrollParamsSchema,
   TypeTextParamsSchema,
   KeyPressParamsSchema,
   HotkeyParamsSchema,
@@ -22,6 +23,7 @@ export const SUPPORTED_ACTIONS: readonly ActionType[] = [
   "TYPE_TEXT",
   "KEY_PRESS",
   "HOTKEY",
+  "SCROLL",
   "OPEN_APP",
   "WAIT",
   "SCREENSHOT",
@@ -33,6 +35,7 @@ const PARAM_SCHEMAS = {
   CLICK: ClickParamsSchema,
   DOUBLE_CLICK: DoubleClickParamsSchema,
   MOVE_MOUSE: MoveMouseParamsSchema,
+  SCROLL: ScrollParamsSchema,
   TYPE_TEXT: TypeTextParamsSchema,
   KEY_PRESS: KeyPressParamsSchema,
   HOTKEY: HotkeyParamsSchema,
@@ -81,7 +84,7 @@ export function hashTextFingerprint(text: string): string {
 
 /**
  * Deterministic action fingerprint for loop detection.
- * Examples: CLICK:500:300:left | TYPE_TEXT:<hash> | HOTKEY:ctrl+l
+ * Examples: CLICK:500:300:left | TYPE_TEXT:<hash> | HOTKEY:ctrl+l | SCROLL:down:5
  */
 export function actionFingerprint(action: ComputerAction): string {
   switch (action.type) {
@@ -92,6 +95,14 @@ export function actionFingerprint(action: ComputerAction): string {
     }
     case "MOVE_MOUSE":
       return `${action.type}:${action.params.x}:${action.params.y}`;
+    case "SCROLL": {
+      const amount = action.params.amount ?? 5;
+      const xy =
+        action.params.x !== undefined && action.params.y !== undefined
+          ? `:${action.params.x}:${action.params.y}`
+          : "";
+      return `SCROLL:${action.params.direction}:${amount}${xy}`;
+    }
     case "TYPE_TEXT":
       return `TYPE_TEXT:${hashTextFingerprint(action.params.text)}`;
     case "KEY_PRESS":
@@ -122,4 +133,9 @@ export function validateActionParams(
   const schema = PARAM_SCHEMAS[type];
   const parsed = schema.parse(params);
   return { type, params: parsed } as ComputerAction;
+}
+
+/** Action types that require coordinate bounds validation. */
+export function requiresCoordinates(type: ActionType): boolean {
+  return type === "CLICK" || type === "DOUBLE_CLICK" || type === "MOVE_MOUSE";
 }

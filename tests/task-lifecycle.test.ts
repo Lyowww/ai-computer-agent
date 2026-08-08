@@ -154,7 +154,16 @@ describe("orchestrator single-shot behavior", () => {
         status: "ACTION_REQUIRED",
         reasoning_summary: "Refresh button is visible top-left.",
         actions: [
-          { type: "CLICK", params: { x: 40, y: 40, button: "LEFT" } },
+          {
+            type: "CLICK",
+            params: {
+              x: 40,
+              y: 40,
+              button: "LEFT",
+              targetLabel: "refresh",
+              targetConfidence: 0.9,
+            },
+          },
         ],
         message: "Clicking refresh.",
       },
@@ -213,9 +222,14 @@ describe("orchestrator single-shot behavior", () => {
       screenshot,
     });
 
-    expect(provider.calls).toBe(1);
+    expect(provider.calls).toBe(0); // deterministic OPEN_APP — no vision needed
     expect(result.executionMode).toBe("single_action");
     expect(result.response.actions[0]?.type).toBe("OPEN_APP");
+    if (result.response.actions[0]?.type === "OPEN_APP") {
+      expect(result.response.actions[0].params.app.toLowerCase()).toContain(
+        "chrome",
+      );
+    }
   });
 
   it("Test 3: multi_step allows multiple planning iterations", async () => {

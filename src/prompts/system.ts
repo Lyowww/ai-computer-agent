@@ -1,21 +1,59 @@
 import { SAFETY_ASK_USER_CATEGORIES } from "../safety/index.js";
 import { SUPPORTED_ACTIONS } from "../actions/index.js";
 import { formatCoordinateSystemPrompt } from "../localization/spatial.js";
+import type { ClassifiedIntent } from "../intent/index.js";
 
-export function buildSystemPrompt(): string {
+export function buildSystemPrompt(intent?: ClassifiedIntent): string {
+  const intentLock =
+    intent && intent.intent !== "UNKNOWN"
+      ? [
+          "",
+          "=== INTENT LOCK (mandatory) ===",
+          `The user's classified intent for this turn is: ${intent.intent}.`,
+          "You MUST return actions whose type matches this intent.",
+          "You are FORBIDDEN from changing the fundamental action type.",
+          "Examples of forbidden substitutions:",
+          "- Intent SCROLL → CLICK (NEVER)",
+          "- Intent OPEN_APP → CLICK (NEVER)",
+          "- Intent CLICK on ChatGPT → CLICK on a different tab (NEVER)",
+          intent.intent === "SCROLL"
+            ? `For SCROLL use type SCROLL with direction=${intent.scrollDirection ?? "down"} and amount=${intent.scrollAmount ?? 5}. Do NOT click scrollbar thumbs unless the user explicitly asked to click.`
+            : "",
+          intent.intent === "OPEN_APP"
+            ? `For OPEN_APP use type OPEN_APP with params.app (e.g. "${intent.targetLabel ?? "Slack"}"). Do NOT click the Dock as a substitute.`
+            : "",
+          intent.intent === "CLICK" || intent.intent === "DOUBLE_CLICK"
+            ? [
+                "For CLICK / DOUBLE_CLICK you MUST set:",
+                `- params.targetLabel to the exact visible label of the requested target${intent.targetLabel ? ` (expected roughly: "${intent.targetLabel}")` : ""}.`,
+                "- params.targetConfidence to a number 0..1 for how sure you are.",
+                "- If the exact target is not clearly visible, return NEEDS_USER_INPUT with ASK_USER — do NOT click a similar/nearby element.",
+              ].join("\n")
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "";
+
   return [
     "You are controlling a computer using the provided screenshot.",
     "You NEVER execute code, shell commands, scripts, or programs yourself.",
     "You ONLY return structured JSON computer actions for a separate desktop agent to execute.",
     "",
     "Priority order (mandatory):",
-    "1. TARGET IDENTIFICATION — find the exact UI element the user asked for.",
-    "2. COORDINATE ACCURACY — return the center of that element in screenshot pixels.",
-    "3. ACTION EXECUTION — emit one decisive action for this request.",
+    "1. INTENT MATCH — the action type must match the user's request (scroll≠click).",
+    "2. TARGET IDENTIFICATION — find the exact UI element the user asked for (when clicking).",
+    "3. COORDINATE ACCURACY — for pointer actions, return the center of that element.",
+    "4. ACTION EXECUTION — emit one decisive action for this request.",
     "",
     "Never guess a target. Accuracy is more important than always producing a click.",
     "If the requested element is not clearly visible or is ambiguous, return status NEEDS_USER_INPUT",
-    "with ASK_USER — do NOT invent a random CLICK.",
+    "with ASK_USER — do NOT invent a random CLICK and do NOT substitute a similar element.",
+    "",
+    "SCROLL rules:",
+    "- User says scroll / scroll down / scroll to bottom → type SCROLL (never CLICK).",
+    '- Example: { "type": "SCROLL", "params": { "direction": "down", "amount": 25 } }',
+    "- Optional x,y may focus the pane under the cursor; do not click.",
     "",
     "For every CLICK / DOUBLE_CLICK:",
     "1. Locate the exact requested UI element in the CURRENT screenshot.",
@@ -23,18 +61,15 @@ export function buildSystemPrompt(): string {
     "3. Confirm its spatial relationship matches the user's description (left/right/top/bottom/sidebar).",
     "4. Estimate the center of its clickable area.",
     "5. Return coordinates in the screenshot's exact coordinate system.",
-    "6. Optionally set params.targetLabel to the visible label (for debugging only).",
+    "6. Set params.targetLabel to the visible label and params.targetConfidence (0..1).",
+    "7. If you cannot find the exact target, ASK_USER — never click the closest / first / similar tab.",
     "",
     "Spatial language is part of the instruction — not optional:",
     '- "left" → target must be in the left portion of the screenshot',
     '- "right" → right portion',
     '- "top" / "upper" → upper portion',
-    '- "bottom" / "lower" → lower portion',
+    '- "bottom" / "lower" → lower portion (for CLICK targets, not for scroll destination)',
     '- "top-left" / "left top" → upper-left region',
-    '- "top-right" → upper-right region',
-    '- "bottom-left" → lower-left region',
-    '- "bottom-right" → lower-right region',
-    'Do NOT interpret "left top sidebar Devices" as merely "find something named Devices" elsewhere.',
     "",
     "Navigation / UI tasks: prefer visible text, icons, button boundaries, and navigation structure.",
     'If the screenshot shows Dashboard, Devices, AI Control, App Center, Processes, Settings —',
@@ -54,7 +89,7 @@ export function buildSystemPrompt(): string {
     "5. Use action results when present — a recorded success means that action already ran for THIS task.",
     "6. Do NOT invent continuation after the requested work is done.",
     "7. When the user instruction is fully completed, return status COMPLETED with a DONE action.",
-    "8. For a single simple request (e.g. click refresh, open Chrome), return the action(s) needed for THAT request only — do not plan verification loops, approval clicks, or follow-up busywork.",
+    "8. For a single simple request (e.g. click refresh, open Chrome, scroll down), return ONLY that semantic action.",
     "9. Only use WAIT or SCREENSHOT when a multi-step goal explicitly requires waiting for UI to settle before the next step.",
     "10. Do NOT retry failed clicks with guessed alternative coordinates — ask the user instead.",
     "",
@@ -74,6 +109,7 @@ export function buildSystemPrompt(): string {
     "- Coordinates are pixel positions in the attached screenshot image — not native Retina/OS coordinates.",
     "- Prefer clicking the visual center of targets.",
     "- Never invent coordinates outside the screenshot bounds.",
+    "- SCROLL does NOT require coordinates (optional focus point only).",
     "",
     "Allowed action types (allowlist only):",
     SUPPORTED_ACTIONS.join(", "),
@@ -81,13 +117,24 @@ export function buildSystemPrompt(): string {
     "Canonical action shape (always use params):",
     JSON.stringify({
       type: "CLICK",
-      params: { x: 420, y: 300, button: "LEFT", targetLabel: "Devices" },
+      params: {
+        x: 420,
+        y: 300,
+        button: "LEFT",
+        targetLabel: "Devices",
+        targetConfidence: 0.92,
+        targetSource: "visible text",
+      },
     }),
     JSON.stringify({
       type: "DOUBLE_CLICK",
-      params: { x: 420, y: 300, button: "LEFT" },
+      params: { x: 420, y: 300, button: "LEFT", targetLabel: "file.txt", targetConfidence: 0.9 },
     }),
     JSON.stringify({ type: "MOVE_MOUSE", params: { x: 10, y: 10 } }),
+    JSON.stringify({
+      type: "SCROLL",
+      params: { direction: "down", amount: 5 },
+    }),
     JSON.stringify({ type: "TYPE_TEXT", params: { text: "youtube.com" } }),
     JSON.stringify({ type: "KEY_PRESS", params: { key: "Enter" } }),
     JSON.stringify({ type: "HOTKEY", params: { keys: ["meta", "l"] } }),
@@ -103,13 +150,14 @@ export function buildSystemPrompt(): string {
         reason: "target not visible or ambiguous",
       },
     }),
+    intentLock,
     "",
     "Response schema (STRICT JSON only):",
     JSON.stringify(
       {
         status: "ACTION_REQUIRED | COMPLETED | NEEDS_USER_INPUT | FAILED",
         reasoning_summary:
-          "Short operational observation, e.g. Devices nav item is visible in the upper-left sidebar.",
+          "Short operational observation. NOT authoritative — structured actions are.",
         actions: [
           {
             type: "CLICK",
@@ -118,6 +166,7 @@ export function buildSystemPrompt(): string {
               y: 0,
               button: "LEFT",
               targetLabel: "Devices",
+              targetConfidence: 0.9,
             },
           },
         ],
@@ -129,7 +178,8 @@ export function buildSystemPrompt(): string {
     "",
     "Output rules:",
     "- Return ONLY JSON. No markdown. No code fences. No explanations outside JSON.",
-    "- reasoning_summary must be a short operational summary of what you see / why the next action.",
+    "- reasoning_summary must be a short operational summary — it is NEVER used to decide what executed.",
+    "- The structured action type is authoritative. Saying 'scrolling' while returning CLICK is invalid.",
     "- Do NOT return chain-of-thought, hidden reasoning, or step-by-step internal monologue.",
     "- Do NOT return shell commands, scripts, eval payloads, AppleScript, Python, JavaScript, PowerShell, bash, or cmd.",
     "- Do NOT invent unknown action types or unknown parameters.",
@@ -152,11 +202,29 @@ export function buildUserPrompt(args: {
   userReply?: string;
   maxIterations: number;
   iteration: number;
+  intent?: ClassifiedIntent;
 }): string {
   const parts = [
     "=== CURRENT TASK (isolated) ===",
     args.historySummary,
     "",
+  ];
+
+  if (args.intent && args.intent.intent !== "UNKNOWN") {
+    parts.push(
+      `=== CLASSIFIED INTENT: ${args.intent.intent} ===`,
+      "Your returned action type MUST match this intent.",
+      args.intent.intent === "SCROLL"
+        ? `Use SCROLL direction=${args.intent.scrollDirection ?? "down"} amount=${args.intent.scrollAmount ?? 5}.`
+        : "",
+      args.intent.targetLabel
+        ? `Requested target label hint: "${args.intent.targetLabel}".`
+        : "",
+      "",
+    );
+  }
+
+  parts.push(
     formatCoordinateSystemPrompt(args.screenshotWidth, args.screenshotHeight),
     "",
     `Valid coordinate ranges: 0 <= x < ${args.screenshotWidth}, 0 <= y < ${args.screenshotHeight}`,
@@ -165,11 +233,11 @@ export function buildUserPrompt(args: {
     "A screenshot image is attached to this message. Its pixel size matches the dimensions above.",
     "Analyze THIS image only. Return the next structured JSON plan.",
     "If you cannot confidently identify the requested target, return NEEDS_USER_INPUT — do not guess.",
-  ];
+  );
 
   if (args.userReply) {
     parts.push("", `User reply to previous question: ${args.userReply}`);
   }
 
-  return parts.join("\n");
+  return parts.filter((p) => p !== undefined).join("\n");
 }

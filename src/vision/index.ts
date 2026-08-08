@@ -8,6 +8,7 @@ import { toImageDataUrl, extractJsonObject } from "../utils/index.js";
 import { buildSystemPrompt, buildUserPrompt } from "../prompts/index.js";
 import { AiPlanResponseSchema } from "../schemas/index.js";
 import type { ParsedAiPlanResponse } from "../schemas/index.js";
+import type { ClassifiedIntent } from "../intent/index.js";
 
 export interface VisionPlanRequest {
   provider: AiProvider;
@@ -18,6 +19,8 @@ export interface VisionPlanRequest {
   maxIterations: number;
   userReply?: string;
   temperature?: number;
+  /** Pre-classified intent — locks action type in the prompt. */
+  intent?: ClassifiedIntent;
 }
 
 /**
@@ -27,7 +30,7 @@ export interface VisionPlanRequest {
 export async function planWithVision(
   request: VisionPlanRequest,
 ): Promise<ParsedAiPlanResponse> {
-  const system = buildSystemPrompt();
+  const system = buildSystemPrompt(request.intent);
   const userText = buildUserPrompt({
     historySummary: request.historySummary,
     screenshotWidth: request.screenshot.width,
@@ -35,6 +38,7 @@ export async function planWithVision(
     userReply: request.userReply,
     maxIterations: request.maxIterations,
     iteration: request.iteration,
+    intent: request.intent,
   });
 
   const imageUrl = toImageDataUrl(request.screenshot);
