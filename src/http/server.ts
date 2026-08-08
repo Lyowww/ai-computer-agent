@@ -8,7 +8,13 @@
 
 import http from "node:http";
 import { planNextAction } from "../orchestrator/index.js";
-import type { ComputerAction } from "../types/index.js";
+import type {
+  ActionResult,
+  ComputerAction,
+  ExecutionMode,
+} from "../types/index.js";
+import { inferExecutionMode } from "../execution/mode.js";
+import { nowIso } from "../utils/index.js";
 
 const PORT = Number(process.env.AI_HTTP_PORT ?? process.env.PORT ?? 4000);
 const API_KEY = process.env.AI_SERVICE_API_KEY?.trim() ?? "";
@@ -71,6 +77,29 @@ function toWireActions(actions: ComputerAction[]): Array<{
   }));
 }
 
+type IncomingPreviousAction = ComputerAction & {
+  success?: boolean;
+  error?: string;
+  result?: Record<string, unknown>;
+};
+
+function deriveActionResults(
+  previousActions: IncomingPreviousAction[] | undefined,
+  actionResults: ActionResult[] | undefined
+): ActionResult[] | undefined {
+  if (actionResults && actionResults.length > 0) return actionResults;
+  if (!previousActions?.length) return undefined;
+  const derived = previousActions
+    .filter((a) => typeof a.success === "boolean")
+    .map((a) => ({
+      action: { type: a.type, params: a.params } as ComputerAction,
+      success: Boolean(a.success),
+      error: a.error,
+      executedAt: nowIso(),
+    }));
+  return derived.length > 0 ? derived : undefined;
+}
+
 export function createPlanServer(): http.Server {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -96,7 +125,10 @@ export function createPlanServer(): http.Server {
             image: string;
             mimeType?: string;
           };
-          previousActions?: ComputerAction[];
+          previousActions?: IncomingPreviousAction[];
+          actionResults?: ActionResult[];
+          iteration?: number;
+          executionMode?: ExecutionMode;
           userReply?: string;
         };
 
@@ -107,7 +139,10 @@ export function createPlanServer(): http.Server {
           return;
         }
 
-        const { response } = await planNextAction({
+        const executionMode =
+          body.executionMode ?? inferExecutionMode(body.userInstruction);
+
+        const { response, executionMode: mode } = await planNextAction({
           taskId: body.taskId,
           userInstruction: body.userInstruction,
           screenshot: {
@@ -122,6 +157,12 @@ export function createPlanServer(): http.Server {
                 : undefined,
           },
           previousActions: body.previousActions,
+          actionResults: deriveActionResults(
+            body.previousActions,
+            body.actionResults
+          ),
+          iteration: body.iteration,
+          executionMode,
           userReply: body.userReply,
         });
 
@@ -131,6 +172,7 @@ export function createPlanServer(): http.Server {
           message: response.message,
           actions: toWireActions(response.actions),
           reasoning_summary: response.reasoning_summary,
+          executionMode: mode,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

@@ -1,12 +1,14 @@
 import type {
   ActionResult,
   ComputerAction,
+  ExecutionMode,
   Screenshot,
   TaskState,
   TaskStatus,
 } from "../types/index.js";
 import { actionFingerprint } from "../actions/index.js";
 import { createId, nowIso } from "../utils/index.js";
+import { inferExecutionMode } from "../execution/mode.js";
 
 /** Cap retained history to avoid unbounded memory growth. */
 const MAX_PREVIOUS_ACTIONS = 50;
@@ -17,6 +19,7 @@ export interface CreateTaskOptions {
   taskId?: string;
   userInstruction: string;
   screenshot?: Screenshot | null;
+  executionMode?: ExecutionMode;
 }
 
 export function createTaskState(options: CreateTaskOptions): TaskState {
@@ -31,6 +34,8 @@ export function createTaskState(options: CreateTaskOptions): TaskState {
     actionResults: [],
     iteration: 0,
     status: "pending",
+    executionMode:
+      options.executionMode ?? inferExecutionMode(options.userInstruction),
     error: null,
     createdAt: now,
     updatedAt: now,
@@ -182,7 +187,13 @@ export function summarizeHistoryForPrompt(state: TaskState): string {
   lines.push(`Task ID: ${state.taskId}`);
   lines.push(`Iteration: ${state.iteration}`);
   lines.push(`Status: ${state.status}`);
+  lines.push(`Execution mode: ${state.executionMode}`);
   lines.push(`User instruction: ${state.userInstruction}`);
+  if (state.executionMode === "single_action") {
+    lines.push(
+      "Mode hint: This is a single-action request. Plan only what is needed for this instruction; do not invent follow-up work.",
+    );
+  }
 
   if (state.previousActions.length > 0) {
     lines.push("Previous actions:");

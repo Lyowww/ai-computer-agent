@@ -47,6 +47,20 @@ export {
   stripScreenshotImage,
 } from "./memory/index.js";
 
+export {
+  inferExecutionMode,
+  isTerminalTaskStatus,
+  decideAfterActionBatch,
+  shouldReplanOnNonExecutablePlan,
+  looksLikeFakeUserApproval,
+  toNeedsUserInputPlan,
+  agentStatusToLifecycle,
+} from "./execution/index.js";
+export type {
+  TaskLifecycleStatus,
+  AfterActionsDecision,
+} from "./execution/index.js";
+
 export { loadConfig, assertProviderCredentials } from "./utils/config.js";
 export {
   extractJsonObject,
@@ -69,6 +83,7 @@ export type {
   AgentStatus,
   TaskStatus,
   ActionType,
+  ExecutionMode,
 } from "./types/index.js";
 
 /**

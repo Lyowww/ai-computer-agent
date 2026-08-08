@@ -18,7 +18,15 @@ describe("task memory & loop detection", () => {
     expect(state.taskId).toMatch(/^task_/);
     expect(state.iteration).toBe(0);
     expect(state.status).toBe("pending");
+    expect(state.executionMode).toBe("multi_step");
     expect(state.previousActions).toEqual([]);
+  });
+
+  it("defaults simple instructions to single_action", () => {
+    const state = createTaskState({
+      userInstruction: "Click the refresh button",
+    });
+    expect(state.executionMode).toBe("single_action");
   });
 
   it("records planned actions and increments iteration", () => {

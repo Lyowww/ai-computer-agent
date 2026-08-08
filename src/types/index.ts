@@ -11,12 +11,24 @@ export type AgentStatus =
   | "NEEDS_USER_INPUT"
   | "FAILED";
 
+/**
+ * In-memory task status used by the AI orchestrator.
+ * Wire / backend lifecycle uses TaskLifecycleStatus (PENDING, RUNNING, …).
+ */
 export type TaskStatus =
   | "pending"
   | "running"
   | "completed"
   | "needs_user_input"
-  | "failed";
+  | "failed"
+  | "cancelled";
+
+/**
+ * How the backend should treat planning after actions execute.
+ * - single_action: plan once → execute → END (default for normal requests)
+ * - multi_step: allow screenshot/plan loops until COMPLETED
+ */
+export type ExecutionMode = "single_action" | "multi_step";
 
 export type ActionType =
   | "CLICK"
@@ -150,6 +162,7 @@ export interface TaskState {
   actionResults: ActionResult[];
   iteration: number;
   status: TaskStatus;
+  executionMode: ExecutionMode;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -165,6 +178,8 @@ export interface PlanNextActionInput {
   previousActions?: ComputerAction[];
   actionResults?: ActionResult[];
   iteration?: number;
+  /** Optional override; otherwise inferred from the instruction. */
+  executionMode?: ExecutionMode;
   /** Optional user reply when the previous status was NEEDS_USER_INPUT. */
   userReply?: string;
   /** Existing task state to continue; if omitted a new task is created. */
@@ -174,6 +189,7 @@ export interface PlanNextActionInput {
 export interface PlanNextActionResult {
   taskState: TaskState;
   response: AiPlanResponse;
+  executionMode: ExecutionMode;
 }
 
 export type AiProviderName = "openrouter" | "gemini";

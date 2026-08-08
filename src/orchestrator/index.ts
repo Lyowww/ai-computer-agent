@@ -1,4 +1,5 @@
 import type {
+  ActionResult,
   AiPlanResponse,
   AiProvider,
   ComputerAction,
@@ -23,6 +24,12 @@ import {
   countConsecutiveFailedRepeats,
   countConsecutiveSameActions,
 } from "../memory/index.js";
+import { inferExecutionMode } from "../execution/mode.js";
+import {
+  looksLikeFakeUserApproval,
+  toNeedsUserInputPlan,
+} from "../execution/lifecycle.js";
+import { nowIso } from "../utils/index.js";
 
 export interface OrchestratorOptions {
   config?: Partial<OrchestratorConfig>;
@@ -73,7 +80,28 @@ export class Orchestrator {
         taskId: input.taskId,
         userInstruction: input.userInstruction,
         screenshot,
+        executionMode:
+          input.executionMode ?? inferExecutionMode(input.userInstruction),
       });
+
+    // Hard boundary: never plan for terminal tasks
+    if (
+      state.status === "completed" ||
+      state.status === "failed" ||
+      state.status === "cancelled"
+    ) {
+      const response = failResponse(
+        `Task is already ${state.status}; refusing further planning.`,
+      );
+      return {
+        taskState: state,
+        response: {
+          ...response,
+          status: state.status === "completed" ? "COMPLETED" : "FAILED",
+        },
+        executionMode: state.executionMode,
+      };
+    }
 
     // Merge caller-supplied history when continuing without full taskState
     if (!input.taskState) {
@@ -86,7 +114,13 @@ export class Orchestrator {
       if (typeof input.iteration === "number") {
         state = { ...state, iteration: input.iteration };
       }
+      if (input.executionMode) {
+        state = { ...state, executionMode: input.executionMode };
+      }
     }
+
+    // Map previousActions[].success into actionResults when callers only send previousActions
+    state = ensureActionResultsFromPrevious(state, input);
 
     state = updateScreenshot(state, screenshot);
     state = setTaskStatus(state, "running");
@@ -97,7 +131,11 @@ export class Orchestrator {
         `Maximum iterations (${this.config.maxIterations}) reached without completing the task.`,
       );
       state = setTaskError(state, response.message);
-      return { taskState: state, response };
+      return {
+        taskState: state,
+        response,
+        executionMode: state.executionMode,
+      };
     }
 
     // --- Loop protection: repeated failed / identical actions ---
@@ -121,7 +159,11 @@ export class Orchestrator {
           "Stuck repeating an unsuccessful action. Please provide guidance.",
       };
       state = recordPlannedActions(state, response.actions, "needs_user_input");
-      return { taskState: state, response };
+      return {
+        taskState: state,
+        response,
+        executionMode: state.executionMode,
+      };
     }
 
     const sameActions = countConsecutiveSameActions(state.previousActions);
@@ -130,7 +172,11 @@ export class Orchestrator {
         `Detected action loop (${sameActions.fingerprint}). Aborting to prevent infinite retries.`,
       );
       state = setTaskError(state, response.message);
-      return { taskState: state, response };
+      return {
+        taskState: state,
+        response,
+        executionMode: state.executionMode,
+      };
     }
 
     // --- Vision planning ---
@@ -150,7 +196,11 @@ export class Orchestrator {
         err instanceof Error ? err.message : "Unknown vision planning error";
       const response = failResponse(`AI planning failed: ${message}`);
       state = setTaskError(state, response.message);
-      return { taskState: state, response };
+      return {
+        taskState: state,
+        response,
+        executionMode: state.executionMode,
+      };
     }
 
     // Re-validate (defense in depth)
@@ -160,7 +210,11 @@ export class Orchestrator {
         `Invalid AI plan schema: ${planParse.error.message}`,
       );
       state = setTaskError(state, response.message);
-      return { taskState: state, response };
+      return {
+        taskState: state,
+        response,
+        executionMode: state.executionMode,
+      };
     }
 
     let plan: AiPlanResponse = planParse.data as AiPlanResponse;
@@ -177,7 +231,11 @@ export class Orchestrator {
           `Safety violation: ${safety.violations.map((v) => v.message).join("; ")}`,
         );
         state = setTaskError(state, response.message);
-        return { taskState: state, response };
+        return {
+          taskState: state,
+          response,
+          executionMode: state.executionMode,
+        };
       }
 
       if (safety.askUserAction) {
@@ -198,6 +256,19 @@ export class Orchestrator {
           actions: safety.safeActions,
         };
       }
+    }
+
+    // Block fake approval / dashboard self-driving
+    if (
+      looksLikeFakeUserApproval({
+        message: plan.message,
+        reasoning_summary: plan.reasoning_summary,
+        actions: plan.actions,
+      })
+    ) {
+      plan = toNeedsUserInputPlan(
+        "I need your real confirmation to continue. Please reply here — I will not click Approve or type into the control UI.",
+      );
     }
 
     // Normalize status vs terminal actions
@@ -245,7 +316,11 @@ export class Orchestrator {
       state = { ...state, error: plan.message };
     }
 
-    return { taskState: state, response: plan };
+    return {
+      taskState: state,
+      response: plan,
+      executionMode: state.executionMode,
+    };
   }
 }
 
@@ -306,6 +381,44 @@ function ensureTerminalDone(actions: ComputerAction[]): ComputerAction[] {
     ...withoutTrailingNoise.filter((a) => a.type !== "DONE"),
     { type: "DONE", params: { summary: "Task completed" } },
   ];
+}
+
+/**
+ * When HTTP callers send previousActions with a `success` flag but no actionResults,
+ * materialize ActionResult entries so the model can see outcomes.
+ */
+function ensureActionResultsFromPrevious(
+  state: TaskState,
+  input: PlanNextActionInput,
+): TaskState {
+  if (input.actionResults && input.actionResults.length > 0) {
+    return state;
+  }
+  if (!input.previousActions || input.previousActions.length === 0) {
+    return state;
+  }
+
+  const withSuccess = input.previousActions as Array<
+    ComputerAction & { success?: boolean; error?: string }
+  >;
+  if (!withSuccess.some((a) => typeof a.success === "boolean")) {
+    return state;
+  }
+
+  const derived: ActionResult[] = withSuccess
+    .filter((a) => typeof a.success === "boolean")
+    .map((a) => ({
+      action: {
+        type: a.type,
+        params: a.params,
+      } as ComputerAction,
+      success: Boolean(a.success),
+      error: a.error,
+      executedAt: nowIso(),
+    }));
+
+  if (derived.length === 0) return state;
+  return { ...state, actionResults: derived };
 }
 
 /**
