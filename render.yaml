@@ -1,0 +1,34 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: ai-computer-agent
+    runtime: node
+    plan: free
+    # Compile TypeScript (dist/ is gitignored). Include devDeps so `tsc` is available
+    # even when NODE_ENV=production during install.
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: AI_PROVIDER
+        value: openrouter
+      - key: AI_MODEL
+        value: google/gemini-2.5-flash
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_HTTP_REFERER
+        sync: false
+      - key: OPENROUTER_APP_NAME
+        value: PetAI Computer Agent
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MAX_AGENT_ITERATIONS
+        value: "30"
+      - key: MAX_SAME_ACTION_RETRIES
+        value: "3"
+      - key: AI_TIMEOUT_MS
+        value: "60000"
+      - key: AI_SERVICE_API_KEY
+        sync: false

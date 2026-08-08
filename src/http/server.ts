@@ -146,11 +146,12 @@ export function createPlanServer(): http.Server {
 
 export function startPlanServer(port = PORT): http.Server {
   const server = createPlanServer();
-  server.listen(port, () => {
+  // Bind all interfaces so Render / containers can reach the service.
+  server.listen(port, "0.0.0.0", () => {
     console.log(
       JSON.stringify({
         level: "INFO",
-        message: `AI computer agent listening on http://localhost:${port}`,
+        message: `AI computer agent listening on 0.0.0.0:${port}`,
         endpoints: ["/v1/plan", "/health"],
       })
     );

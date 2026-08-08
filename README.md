@@ -218,12 +218,29 @@ Set `AI_PROVIDER` + `AI_MODEL` (and the matching API key). The orchestrator depe
 ### Option A — HTTP adapter (recommended for local stack)
 
 ```bash
-npm run start:server
-# listens on http://localhost:4000
+npm run build
+npm start
+# listens on http://0.0.0.0:4000 (or PORT / AI_HTTP_PORT)
 # POST /v1/plan   GET /health
 ```
 
 Set backend `AI_SERVICE_URL=http://localhost:4000`. OpenRouter/Gemini keys stay in this process only.
+
+### Deploy on Render
+
+In the Render dashboard (or via `render.yaml`):
+
+| Setting | Value |
+|---------|--------|
+| **Build Command** | `npm install --include=dev && npm run build` |
+| **Start Command** | `npm start` |
+| **Health Check Path** | `/health` |
+
+Do **not** use `node ./dist/index.js` — that is the library export entry. The HTTP service is `dist/server.js` (`npm start`).
+
+`dist/` is gitignored, so the build must compile TypeScript. `--include=dev` ensures `tsc` is available when `NODE_ENV=production`.
+
+Required env vars: `OPENROUTER_API_KEY` (or `GEMINI_API_KEY`), plus optional `AI_SERVICE_API_KEY`, `AI_MODEL`, etc.
 
 ### Option B — In-process
 
